@@ -79,7 +79,13 @@ bool ThreadedSocketConnection::send( const std::string& msg )
   ssize_t totalSent = 0;
   while(totalSent < (int)msg.length())
   {
-    ssize_t sent = socket_send( m_socket, msg.c_str() + totalSent, msg.length() );
+    // Only what is left: the whole length after a partial send read past the message and put
+    // those bytes on the wire (quickfix/quickfix#742).
+    ssize_t sent = socket_send( m_socket, msg.c_str() + totalSent, msg.length() - totalSent );
+#ifndef _MSC_VER
+    // A signal before any byte went out is not a failed send.
+    if( sent < 0 && errno == EINTR ) continue;
+#endif
     if(sent < 0) return false;
     totalSent += sent;
   }
