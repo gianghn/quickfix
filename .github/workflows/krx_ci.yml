@@ -25,7 +25,8 @@ jobs:
           ruby-version: "3.3"
       - name: Build
         run: |
-          cmake . -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          # CMake 4 (macOS runners) refuses this tree's cmake_minimum_required below 3.5.
+          cmake . -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build . --config ${{ matrix.configuration }} --parallel 4
       - name: Unit tests
         working-directory: ./test
