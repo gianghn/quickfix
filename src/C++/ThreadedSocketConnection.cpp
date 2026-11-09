@@ -69,6 +69,9 @@ ThreadedSocketConnection::~ThreadedSocketConnection()
     m_pSession->setResponder( 0 );
     Session::unregisterSession( m_pSession->getSessionID() );
   }
+  // The one place the socket's number is released; the owner deletes the connection when no
+  // other thread can still reach the number (ThreadedSocketAcceptor/Initiator::releaseConnection).
+  socket_close( m_socket );
 }
 
 bool ThreadedSocketConnection::send( const std::string& msg )
@@ -94,9 +97,11 @@ bool ThreadedSocketConnection::connect()
 }
 
 void ThreadedSocketConnection::disconnect()
-{  
+{
   m_disconnect = true;
-  socket_close( m_socket );
+  // Shut down, don't close: it wakes the reading thread and the number stays ours, so a second
+  // disconnect, from any thread, can never reach a file or socket opened since.
+  shutdown( m_socket, 2 );
 }
 
 bool ThreadedSocketConnection::read()

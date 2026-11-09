@@ -62,7 +62,7 @@ private:
   void doConnect( const SessionID& s, const Dictionary& d );
 
   void addThread(socket_handle s, thread_id t );
-  void removeThread(socket_handle s );
+  void releaseConnection( socket_handle s, ThreadedSocketConnection* pConnection );
   void lock() { Locker l(m_mutex); }
   static THREAD_PROC socketThread( void* p );
 
@@ -74,6 +74,8 @@ private:
   int m_sendBufSize;
   int m_rcvBufSize;
   SocketToThread m_threads;
+  // Threads that closed their socket after the stop began; onStop joins them.
+  std::vector < thread_id > m_closedThreads;
   Mutex m_mutex;
 };
 /*! @} */

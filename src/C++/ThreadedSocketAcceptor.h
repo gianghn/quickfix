@@ -83,6 +83,7 @@ private:
 
   void addThread(socket_handle s, thread_id t );
   void removeThread(socket_handle s );
+  void releaseConnection( socket_handle s, ThreadedSocketConnection* pConnection );
   static THREAD_PROC socketAcceptorThread( void* p );
   static THREAD_PROC socketConnectionThread( void* p );
 
@@ -90,6 +91,8 @@ private:
   PortToSessions m_portToSessions;
   SocketToPort m_socketToPort;
   SocketToThread m_threads;
+  // Threads that closed their socket after the stop began; onStop joins them.
+  std::vector < thread_id > m_closedThreads;
   Mutex m_mutex;
 };
 /*! @} */

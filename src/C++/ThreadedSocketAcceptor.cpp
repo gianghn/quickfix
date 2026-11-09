@@ -133,9 +133,10 @@ bool ThreadedSocketAcceptor::onPoll()
 }
 
 void ThreadedSocketAcceptor::onStop()
-{ 
+{
   SocketToThread threads;
   SocketToThread::iterator i;
+  std::vector < thread_id > closedThreads;
 
   {
     Locker l(m_mutex);
@@ -150,14 +151,25 @@ void ThreadedSocketAcceptor::onStop()
         break;
     }
 
+    // Under the lock, every socket in m_threads is still open (releaseConnection takes it out
+    // before closing it). Listening sockets are closed here, their only close; connections are
+    // shut down, and their own threads close them.
+    for ( i = m_threads.begin(); i != m_threads.end(); ++i )
+    {
+      if ( m_sockets.find( i->first ) != m_sockets.end() )
+        socket_close( i->first );
+      else
+        shutdown( i->first, 2 );
+    }
     threads = m_threads;
     m_threads.clear();
+    closedThreads.swap( m_closedThreads );
   }
 
   for ( i = threads.begin(); i != threads.end(); ++i )
-    socket_close( i->first );
-  for ( i = threads.begin(); i != threads.end(); ++i )
     thread_join( i->second );
+  for ( const thread_id& thread : closedThreads )
+    thread_join( thread );
 }
 
 void ThreadedSocketAcceptor::addThread(socket_handle s, thread_id t )
@@ -249,9 +261,23 @@ THREAD_PROC ThreadedSocketAcceptor::socketConnectionThread( void* p )
   socket_handle socket = pConnection->getSocket();
 
   while ( pConnection->read() ) {}
-  delete pConnection;
-  if( !pAcceptor->isStopped() )
-    pAcceptor->removeThread( socket );
+  pAcceptor->releaseConnection( socket, pConnection );
   return 0;
+}
+
+void ThreadedSocketAcceptor::releaseConnection( socket_handle s, ThreadedSocketConnection* pConnection )
+{
+  // Under the lock, deleting the connection (which closes its socket) and leaving m_threads are
+  // one step, so onStop never shuts down a number that may already belong to someone else.
+  Locker l( m_mutex );
+  delete pConnection;
+  SocketToThread::iterator i = m_threads.find( s );
+  if ( i == m_threads.end() )
+    return; // onStop took this thread and joins it
+  if ( isStopped() )
+    m_closedThreads.push_back( i->second ); // onStop is still to come and joins it
+  else
+    thread_detach( i->second );
+  m_threads.erase( i );
 }
 }
