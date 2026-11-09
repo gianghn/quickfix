@@ -1,5 +1,10 @@
 name: Build with Autotools
-on: [pull_request, push]
+# KRX fork: upstream's matrix, only for upstream's branch; our branches run krx_ci.yml.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
 
 jobs:
     build:

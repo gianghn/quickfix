@@ -1,0 +1,35 @@
+# KRX fork CI (KRX_FORK_NOTES.md): QuickFIX's own unit and acceptance suites on the platforms
+# the KRX gateway builds on. The gateway's checks of these fixes (tests/test_fd_double_close.rs,
+# tests/test_partial_send.rs, fix_connection_safety.feature) run in its own CI.
+name: KRX fork CI
+on:
+  push:
+    branches: ["krx/**"]
+  pull_request:
+    branches: ["krx/**"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Build
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          cmake --build . --config ${{ matrix.configuration }} --parallel 4
+      - name: Unit tests
+        working-directory: ./test
+        run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
+      - name: Acceptance tests
+        working-directory: ./test
+        run: ./runat.sh 6666

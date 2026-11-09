@@ -63,6 +63,44 @@ first and re-running the checks.
   #748, #750, #763, #766, none merged). It only runs when a config sets `HttpAcceptPort`; no
   gateway config does (checked 2026-11-09).
 
+## Next work (for a separate agent, agreed with the owner 2026-11-09)
+
+Both forks are in the gateway's build: this one (`gianghn/quickfix`, branch `krx/fd-double-close`)
+and `gianghn/quickfix-rs` (branch `thread-mod`), vendored at `vendor/quickfix-rs` in
+`enCapital/krx_gateway_rust`. Each fork has a `krx_ci.yml` workflow for its branch.
+
+Checked so far on this branch: QuickFIX's unit tests (53 cases, 1,954 assertions) and acceptance
+tests (468) pass on macOS; the gateway's whole definition of done passes with both fixes.
+
+1. **Make quickfix-rs's `quickfix/tests/test_session.rs` reliable.** It failed locally on this
+   branch: once a segfault after `test_session_set_next_sender_target_msg_seq_num` hung, once
+   `test_session_login_logout` at line 70. Its own faults: both tests register the same session
+   IDs in QuickFIX's process-wide registry while running in parallel; the logon wait
+   `while !sender.is_logged_in() && !receiver.is_logged_in()` stops when either side is logged
+   on (`||` was meant); it relies on fixed 50 ms sleeps. Whether it also fails on upstream
+   `94625580`: see the result recorded below. Fix the test, then find out whether a real defect
+   remains (it uses the same `ThreadedSocket*` classes as the gateway).
+2. **Get both forks' CI green** on Linux and macOS.
+3. **Fix the plain `SocketAcceptor` triple close** (above), test first, before quickfix-rs's
+   corrected server-kind mapping (arthurlm/quickfix-rs#36) is ever taken.
+4. **Offering the fixes upstream** (our double close; #742 plus the `EINTR` retry): the owner
+   decides first, since the PRs are public.
+
+Ways of working: tests before code (a red run recorded, then green), every vendor change approved
+by the owner, push only to the forks, and update this file with each change.
+
+### `test_session` on upstream `94625580` versus this branch
+
+Run 2026-11-09 on macOS, three times each (`cargo test -p quickfix --test test_session`):
+
+| libquickfix | parallel (default) | one test at a time |
+|---|---|---|
+| upstream `94625580` | SIGSEGV 3 of 3 | pass 3 of 3 |
+| this branch | SIGSEGV 3 of 3 | pass 3 of 3 |
+
+The crash predates our fixes: it comes from the two tests sharing the session registry. Until
+item 1 is done, quickfix-rs's `krx_ci.yml` runs the tests one at a time.
+
 ## Updating from upstream
 
 Rebase this branch on the new upstream commit, re-run the gateway's checks above and its whole
