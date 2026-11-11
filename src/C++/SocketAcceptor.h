@@ -29,6 +29,7 @@
 #include "Acceptor.h"
 #include "SocketServer.h"
 #include "SocketConnection.h"
+#include <memory>
 
 namespace FIX
 {
@@ -72,7 +73,8 @@ private:
   void onError( SocketServer& );
   void onTimeout( SocketServer& );
 
-  SocketServer* m_pServer;
+  // KRX fork (K-6): owned, so an acceptor driven by poll() frees its server too.
+  std::unique_ptr<SocketServer> m_pServer;
   PortToSessions m_portToSessions;
   SessionToPort m_sessionToPort;
   SocketConnections m_connections;
