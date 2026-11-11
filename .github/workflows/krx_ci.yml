@@ -33,9 +33,17 @@ jobs:
       - name: Unit tests
         working-directory: ./test
         run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
-      - name: Acceptance tests
+      # FIX.4.4 only, the gateway's version (owner, 11 Nov 2026); runat.sh runs every version when
+      # they are needed again.
+      - name: Acceptance tests (FIX.4.4)
         working-directory: ./test
-        run: ./runat.sh 6666
+        timeout-minutes: 30
+        run: |
+          test -x ./at || { echo "::error::test/at was not built"; exit 1; }
+          ./setup.sh 6666
+          ./at -f cfg/at.cfg &
+          trap 'kill $!' EXIT
+          ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix44/*.def
       - name: KRX scenarios (docs/V1_BDD_CHECKLIST.md)
         run: ctest --output-on-failure -R krx_ut
 
@@ -62,15 +70,15 @@ jobs:
         working-directory: ./test
         run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
       # Not runat.sh: inside a container its `at` outlives the script and holds the step open.
-      - name: Acceptance tests
+      # FIX.4.4 only, as in the job above.
+      - name: Acceptance tests (FIX.4.4)
         working-directory: ./test
         timeout-minutes: 30
         run: |
           ./setup.sh 6666
           ./at -f cfg/at.cfg &
           trap 'kill $!' EXIT
-          ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix4*/*.def definitions/server/fix50/*.def \
-            definitions/server/fix50sp1/*.def definitions/server/fix50sp2/*.def definitions/server/validate/*.def
+          ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix44/*.def
       - name: KRX scenarios (gcc-toolset-13)
         run: |
           source /opt/rh/gcc-toolset-13/enable
@@ -114,8 +122,8 @@ jobs:
         run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
       - name: KRX scenarios
         run: ctest --output-on-failure -R krx_ut
-      # FIX.4.4 only here (the gateway's version; owner, 11 Nov 2026): the `test` job above runs every
-      # version, and runat.sh / runat_threaded.sh run them all under a sanitizer when needed.
+      # FIX.4.4 only (the gateway's version; owner, 11 Nov 2026), as in every job; runat.sh and
+      # runat_threaded.sh run all versions when they are needed again.
       # The runner keeps going when the server is gone ("Connection refused" per test), so fail at
       # once without `at`, and cap each run.
       - name: Acceptance tests (FIX.4.4)
