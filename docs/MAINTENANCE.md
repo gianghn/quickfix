@@ -143,6 +143,9 @@ Line coverage says a line ran; a mutation run says a test would notice if it wer
   in the PR as equivalent with a one-line reason. Never lower the gate to pass.
 - **Mutators:** Mull's defaults plus `cxx_remove_void_call` (drops `fflush`, `clearerr`, unlock
   calls) and boundary mutators (`<` ↔ `<=`): those are where our P0s were.
+- **Known Mull artifact, inline functions:** a function defined in a header is compiled into every
+  file that includes it and the linker keeps one copy, often not the one Mull mutated, so its
+  mutants survive whatever the tests do (PR #25). Put new logic in the `.cpp`.
 - **Known Mull artifact:** on a line like `m_state.onEvent( e.what() )` (a call taking a temporary
   `std::string`), `cxx_remove_void_call` removes the temporary's destructor, not the call, and is
   reported as the call surviving; no test can kill it (a leak). Found on PR #20: the same mutant

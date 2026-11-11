@@ -162,12 +162,7 @@ public:
 
   // KRX fork (P0-3, D11): how long one message may take to send before the connection is dropped:
   // SendTimeout if set, otherwise half the heartbeat interval (15 s while that is still unknown).
-  int getSendTimeoutMs()
-  {
-    if ( m_sendTimeoutMs > 0 ) return m_sendTimeoutMs;
-    const int heartBtInt = m_state.heartBtInt().getValue();
-    return heartBtInt > 0 ? heartBtInt * 500 : 15000;
-  }
+  int getSendTimeoutMs();
   void setSendTimeoutMs ( int value )
     { m_sendTimeoutMs = value; }
 

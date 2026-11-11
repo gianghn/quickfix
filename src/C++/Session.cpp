@@ -591,6 +591,13 @@ Message Session::newMessage( const MsgType & msgType ) const
   }
 }
 
+int Session::getSendTimeoutMs()
+{
+  if ( m_sendTimeoutMs > 0 ) return m_sendTimeoutMs;
+  const int heartBtInt = m_state.heartBtInt().getValue();
+  return heartBtInt > 0 ? heartBtInt * 500 : 15000;
+}
+
 bool Session::send( Message& message )
 {
   message.getHeader().removeField( FIELD::PossDupFlag );
