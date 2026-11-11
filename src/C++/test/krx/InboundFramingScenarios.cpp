@@ -3,6 +3,7 @@
 // Out-of-bounds reads show as wrong results here and as reports under AddressSanitizer (Linux CI).
 // Rows 2.5-2.7 (P0-2): an error while a message is handled ends that connection, never the process.
 // Rows 2.8-2.10 (P0-7): a garbled frame is skipped; the good frames around it are read, once each.
+// Row 2.11 (P1-13): the parser's buffer and BodyLength are capped; past either the connection ends.
 #include <chrono>
 #include <cstddef>
 #include <fstream>
@@ -32,6 +33,13 @@ constexpr const char* kBadLengthFrame = "8=FIX.4.2\0019=A\00135=A\001108=30\0011
 constexpr const char* kNoLengthFrame = "8=FIX.4.2\00135=A\001108=30\00110=31\001";
 // A garbled frame for a FIX.4.4 session: BodyLength is not a number.
 constexpr const char* kGarbledFix44 = "8=FIX.4.4\0019=abc\00135=0\00134=99\00110=000\001";
+
+// A FIX.4.4 Heartbeat whose body is exactly `length` bytes, padded with a Text field.
+std::string FrameWithBodyOf(std::size_t length) {
+  const std::string head = "35=0\00158=";
+  const std::string body = head + std::string(length - head.size() - 1, 'x') + "\001";
+  return "8=FIX.4.4\0019=" + std::to_string(body.size()) + "\001" + body + "10=000\001";
+}
 
 // Every message the parser gives back while `bytes` arrive one at a time.
 std::vector<std::string> ReadByteByByte(const std::string& bytes) {
@@ -336,6 +344,73 @@ SCENARIO("A frame start that arrives with the garbled frame before it is kept",
       THEN("the good frame is read, whole") {
         INFO(message);
         REQUIRE((!early && read && message == good));
+      }
+    }
+  }
+}
+
+SCENARIO("A BodyLength over the cap ends the connection", "[krx][v1][security][p1-13]") {
+  GIVEN("a frame announcing one byte more than the largest body") {
+    FIX::Parser parser;
+    parser.addToStream("8=FIX.4.4\0019=" + std::to_string(FIX::Parser::MAX_BODY_LENGTH + 1) +
+                       "\001");
+    THEN("reading it fails the connection at once, without waiting for the body") {
+      std::string message;
+      REQUIRE_THROWS_AS(parser.readNextFixMessage(message), FIX::SocketRecvFailed);
+    }
+  }
+}
+
+SCENARIO("A body of exactly the largest length is still read", "[krx][v1][security][p1-13]") {
+  GIVEN("a frame whose body is exactly the largest length") {
+    const std::string frame =
+        FrameWithBodyOf(static_cast<std::size_t>(FIX::Parser::MAX_BODY_LENGTH));
+    FIX::Parser parser;
+    parser.addToStream(frame);
+    WHEN("it is read") {
+      std::string message;
+      const bool read = parser.readNextFixMessage(message);
+      THEN("it comes back whole") {
+        REQUIRE((read && message == frame));
+      }
+    }
+  }
+}
+
+SCENARIO("Bytes that never form a frame cannot grow the buffer past its cap",
+         "[krx][v1][security][p1-13]") {
+  GIVEN("a stream of bytes with no frame start, one byte longer than the buffer cap") {
+    FIX::Parser parser;
+    parser.addToStream(std::string(FIX::Parser::MAX_BUFFER_SIZE + 1, 'x'));
+    THEN("reading fails the connection") {
+      std::string message;
+      REQUIRE_THROWS_AS(parser.readNextFixMessage(message), FIX::SocketRecvFailed);
+    }
+  }
+}
+
+SCENARIO("A buffer of exactly the cap still waits for more", "[krx][v1][security][p1-13]") {
+  GIVEN("exactly as many bytes as the buffer cap, with no frame start") {
+    FIX::Parser parser;
+    parser.addToStream(std::string(FIX::Parser::MAX_BUFFER_SIZE, 'x'));
+    THEN("reading finds no message and does not fail the connection") {
+      std::string message;
+      bool read = true;
+      REQUIRE_NOTHROW(read = parser.readNextFixMessage(message));
+      REQUIRE_FALSE(read);
+    }
+  }
+}
+
+SCENARIO("A session sent an oversized BodyLength disconnects", "[krx][v1][security][p1-13]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXC211");
+    LogOn(pair);
+    WHEN("the counterparty announces a body of 99,999,999 bytes") {
+      pair.Write("8=FIX.4.4\0019=99999999\00135=0\001");
+      THEN("the session closes the connection and logs why") {
+        REQUIRE(pair.WaitClosed(kWait));
+        REQUIRE(pair.Events().Contains("BodyLength"));
       }
     }
   }

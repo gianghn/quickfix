@@ -50,6 +50,9 @@ EXCEPT ( MessageParseError )
   {
     length = IntConvertor::convert( strLength );
     if( length < 0 ) throw MessageParseError();
+    // KRX fork (P1-13): never wait for, or buffer, a body this large; the connection ends.
+    if( length > MAX_BODY_LENGTH )
+      throw SocketRecvFailed( "BodyLength " + strLength + " is over the " + std::to_string( MAX_BODY_LENGTH ) + " byte limit" );
   }
   catch( FieldConvertError& )
   { throw MessageParseError(); }
@@ -63,6 +66,9 @@ EXCEPT ( MessageParseError )
 {
   std::string::size_type pos = 0;
 
+  // KRX fork (P1-13): bytes that never complete a frame may not grow the buffer without bound.
+  if( m_buffer.size() > MAX_BUFFER_SIZE )
+    throw SocketRecvFailed( "Receive buffer is over the " + std::to_string( MAX_BUFFER_SIZE ) + " byte limit" );
   if( m_buffer.length() < 2 ) return false;
   pos = m_buffer.find( "8=" );
   if( pos == std::string::npos ) return false;
