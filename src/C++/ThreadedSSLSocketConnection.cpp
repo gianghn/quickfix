@@ -321,12 +321,8 @@ bool ThreadedSSLSocketConnection::read()
 
 bool ThreadedSSLSocketConnection::readMessage(std::string &message) EXCEPT (SocketRecvFailed)
 {
-  try
-  {
-    return m_parser.readFixMessage(message);
-  }
-  catch ( MessageParseError & ) {}
-  return true;
+  // KRX fork (P0-7): a garbled frame is skipped; true no longer hands back the previous message.
+  return m_parser.readNextFixMessage(message);
 }
 
 void ThreadedSSLSocketConnection::processStream()

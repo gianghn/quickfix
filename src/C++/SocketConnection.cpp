@@ -223,12 +223,8 @@ EXCEPT ( SocketRecvFailed )
 
 bool SocketConnection::readMessage( std::string& msg )
 {
-  try
-  {
-    return m_parser.readFixMessage( msg );
-  }
-  catch ( MessageParseError& ) {}
-  return true;
+  // KRX fork (P0-7): a garbled frame is skipped; true no longer hands back the previous msg.
+  return m_parser.readNextFixMessage( msg );
 }
 
 void SocketConnection::readMessages( SocketMonitor& socketMonitor )

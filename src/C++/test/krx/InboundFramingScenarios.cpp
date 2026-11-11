@@ -2,11 +2,13 @@
 // forged one must be rejected as an invalid message instead of moving the parser past the buffer.
 // Out-of-bounds reads show as wrong results here and as reports under AddressSanitizer (Linux CI).
 // Rows 2.5-2.7 (P0-2): an error while a message is handled ends that connection, never the process.
+// Rows 2.8-2.10 (P0-7): a garbled frame is skipped; the good frames around it are read, once each.
 #include <chrono>
 #include <cstddef>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 #include <catch_amalgamated.hpp>
 
@@ -15,11 +17,35 @@
 #include "FixFields.h"
 #include "FixInput.h"
 #include "Message.h"
+#include "Parser.h"
 #include "SessionPair.h"
 
 namespace {
 
 constexpr std::chrono::seconds kWait{5};
+
+// Frames for the parser alone (it checks framing, not checksums): the upstream ParserTestCase ones.
+constexpr const char* kGoodFrame = "8=FIX.4.2\0019=12\00135=A\001108=30\00110=31\001";
+// A BodyLength that is not a number; "108=" in its body is where a naive "8=" search resyncs.
+constexpr const char* kBadLengthFrame = "8=FIX.4.2\0019=A\00135=A\001108=30\00110=31\001";
+// No BodyLength at all: a search for "9=" would borrow the next frame's.
+constexpr const char* kNoLengthFrame = "8=FIX.4.2\00135=A\001108=30\00110=31\001";
+// A garbled frame for a FIX.4.4 session: BodyLength is not a number.
+constexpr const char* kGarbledFix44 = "8=FIX.4.4\0019=abc\00135=0\00134=99\00110=000\001";
+
+// Every message the parser gives back while `bytes` arrive one at a time.
+std::vector<std::string> ReadByteByByte(const std::string& bytes) {
+  FIX::Parser parser;
+  std::vector<std::string> messages;
+  std::string message;
+  for (const char byte : bytes) {
+    parser.addToStream(&byte, 1);
+    while (parser.readNextFixMessage(message)) {
+      messages.push_back(message);
+    }
+  }
+  return messages;
+}
 
 // A SequenceReset (reset mode) from the counterparty: its next sequence number is new_seq_no.
 std::string SequenceReset(const krx::SessionPair& pair, int seq_num, int new_seq_no) {
@@ -236,6 +262,130 @@ SCENARIO("An error while the session sends a heartbeat ends the connection",
       THEN("the session logs the error and closes the connection") {
         REQUIRE(pair.WaitClosed(kWait));
         REQUIRE(pair.Events().Contains("gateway admin callback failed"));
+      }
+    }
+  }
+}
+
+SCENARIO("The parser skips a garbled frame and returns the good one behind it",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("a frame whose BodyLength is not a number, then a good frame, in one read") {
+    FIX::Parser parser;
+    parser.addToStream(std::string(kBadLengthFrame) + kGoodFrame);
+    WHEN("the next message is read") {
+      std::string message;
+      const bool read = parser.readNextFixMessage(message);
+      THEN("it is the good frame, whole") {
+        INFO(message);
+        REQUIRE((read && message == kGoodFrame));
+      }
+    }
+  }
+}
+
+SCENARIO("A frame without BodyLength does not borrow the next frame's",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("a frame with no BodyLength, then a good frame, arriving one byte at a time") {
+    const std::string bytes = std::string(kNoLengthFrame) + kGoodFrame;
+    WHEN("the parser reads as the bytes arrive") {
+      const std::vector<std::string> messages = ReadByteByByte(bytes);
+      THEN("it gives back the good frame only") {
+        INFO(messages.size());
+        REQUIRE((messages == std::vector<std::string>{kGoodFrame}));
+      }
+    }
+  }
+}
+
+SCENARIO("Good frames around a garbled one are each read once", "[krx][v1][security][p0-7]") {
+  GIVEN("a good frame, a garbled frame and a good frame, arriving one byte at a time") {
+    const std::string bytes = std::string(kGoodFrame) + kBadLengthFrame + kGoodFrame;
+    WHEN("the parser reads as the bytes arrive") {
+      const std::vector<std::string> messages = ReadByteByByte(bytes);
+      THEN("it gives back the two good frames") {
+        INFO(messages.size());
+        REQUIRE((messages == std::vector<std::string>{kGoodFrame, kGoodFrame}));
+      }
+    }
+  }
+}
+
+SCENARIO("A frame whose second field is not BodyLength is rejected as soon as it shows",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("just the BeginString and the first three bytes of a MsgType field") {
+    FIX::Parser parser;
+    parser.addToStream(std::string("8=FIX.4.2\00135"));
+    THEN("reading it throws, without waiting for more bytes") {
+      std::string message;
+      REQUIRE_THROWS_AS(parser.readFixMessage(message), FIX::MessageParseError);
+    }
+  }
+}
+
+SCENARIO("A frame start that arrives with the garbled frame before it is kept",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("a garbled frame and the first byte of a good frame in one read, the rest in the next") {
+    const std::string good = kGoodFrame;
+    FIX::Parser parser;
+    parser.addToStream(std::string("8=FIX.4.2\0019=A\001") + good.front());
+    std::string message;
+    const bool early = parser.readNextFixMessage(message);
+    WHEN("the rest of the good frame arrives") {
+      parser.addToStream(good.substr(1));
+      const bool read = parser.readNextFixMessage(message);
+      THEN("the good frame is read, whole") {
+        INFO(message);
+        REQUIRE((!early && read && message == good));
+      }
+    }
+  }
+}
+
+SCENARIO("After a garbled frame the next good message is processed", "[krx][v1][security][p0-7]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXG28");
+    LogOn(pair);
+    WHEN("a frame without BodyLength and a TestRequest arrive together") {
+      pair.Write(std::string(kNoLengthFrame) + TestRequest(pair, 2));
+      THEN("the session answers the TestRequest with a Heartbeat and stays logged on") {
+        const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "0"));
+        REQUIRE(pair.WaitLoggedOn(kWait));
+      }
+    }
+  }
+}
+
+SCENARIO("A garbled frame never re-delivers the previous message", "[krx][v1][security][p0-7]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXG29");
+    LogOn(pair);
+    WHEN("a TestRequest and then a garbled frame arrive together, then another TestRequest") {
+      pair.Write(TestRequest(pair, 2) + kGarbledFix44);
+      const std::string first = krx::MsgTypeOf(pair.ReadFrame(kWait));
+      pair.Write(TestRequest(pair, 3));
+      const std::string second = krx::MsgTypeOf(pair.ReadFrame(kWait));
+      THEN("both are answered with a Heartbeat, and no Logout for a repeated sequence number") {
+        INFO(first << " then " << second);
+        REQUIRE((first == "0" && second == "0"));
+      }
+    }
+  }
+}
+
+SCENARIO("Good messages queued behind a garbled frame are still delivered",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXG210");
+    LogOn(pair);
+    WHEN("a garbled frame and two TestRequests arrive together") {
+      pair.Write(kGarbledFix44 + TestRequest(pair, 2) + TestRequest(pair, 3));
+      const std::string first = krx::MsgTypeOf(pair.ReadFrame(kWait));
+      const std::string second = krx::MsgTypeOf(pair.ReadFrame(kWait));
+      THEN("both TestRequests are answered") {
+        INFO(first << " then " << second);
+        REQUIRE((first == "0" && second == "0"));
       }
     }
   }

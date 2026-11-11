@@ -36,8 +36,10 @@ EXCEPT ( MessageParseError )
 {
   if( !buffer.size() ) return false;
 
-  std::string::size_type startPos = buffer.find( "\0019=", 0 );
-  if( startPos == std::string::npos ) return false;
+  // KRX fork (P0-7): BodyLength is the field after BeginString, never a later frame's.
+  std::string::size_type startPos = buffer.find( '\001' );
+  if( startPos == std::string::npos || buffer.size() < startPos + 3 ) return false;
+  if( buffer.compare( startPos, 3, "\0019=" ) != 0 ) throw MessageParseError();
   startPos += 3;
   std::string::size_type endPos = buffer.find( "\001", startPos );
   if( endPos == std::string::npos ) return false;
@@ -90,14 +92,29 @@ EXCEPT ( MessageParseError )
   }
   catch( MessageParseError& e )
   {
-    if( length > 0 )
-      m_buffer.erase( 0, pos + length );
-    else
-      m_buffer.erase();
-
+    // KRX fork (P0-7): drop this frame only, up to the SOH before the next one, instead of every
+    // frame queued behind it. With no next frame yet, keep two bytes that may be its "\0018" start.
+    const std::string::size_type next = m_buffer.find( "\0018=" );
+    m_buffer.erase( 0, next != std::string::npos ? next : m_buffer.size() - 2 );
     throw e;
   }
 
   return false;
+}
+
+bool Parser::readNextFixMessage( std::string& str )
+{
+  // Each garbled frame drops at least three bytes, so the loop ends.
+  while( true )
+  {
+    try
+    {
+      return readFixMessage( str );
+    }
+    catch( MessageParseError& )
+    {
+      continue;
+    }
+  }
 }
 }
