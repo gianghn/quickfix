@@ -240,7 +240,7 @@ struct IntTConvertor
     do
     {
       if( x > OVERFLOW_MAX ) return false; // overflow
-      const unsigned char c = *str - '0';
+      const auto c = static_cast<unsigned char>( *str - '0' );
       if( c > 9 ) return false;
       nx = 10 * x + c;
       if( nx < x ) return false; // overflow

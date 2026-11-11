@@ -269,9 +269,10 @@ void ThreadedSocketAcceptor::releaseConnection( socket_handle s, ThreadedSocketC
 {
   // Under the lock, deleting the connection (which closes its socket) and leaving m_threads are
   // one step, so onStop never shuts down a number that may already belong to someone else.
-  Locker l( m_mutex );
-  delete pConnection;
-  SocketToThread::iterator i = m_threads.find( s );
+  const Locker l( m_mutex );
+  std::unique_ptr < ThreadedSocketConnection > connection( pConnection );
+  connection.reset();
+  const auto i = m_threads.find( s );
   if ( i == m_threads.end() )
     return; // onStop took this thread and joins it
   if ( isStopped() )

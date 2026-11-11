@@ -42,9 +42,10 @@ is [V1_PLAN.md](V1_PLAN.md); the fix ledger is [`KRX_FORK_NOTES.md`](../KRX_FORK
 
 | Level | Where | Runs |
 |---|---|---|
-| Unit and library scenarios | `src/C++/test/*TestCase.cpp`, `src/C++/test/krx/*Scenarios.cpp` (Catch2 `SCENARIO`/`GIVEN`/`WHEN`/`THEN`) | `cd test && ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec` (`"[krx]"` for ours, `"[p0-3]"` for one defect) |
+| Upstream unit tests | `src/C++/test/*TestCase.cpp` | `cd test && ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec` |
+| Our scenarios | `src/C++/test/krx/*Scenarios.cpp` (Catch2 `SCENARIO`/`GIVEN`/`WHEN`/`THEN`, target `krx_ut`) | `krx_ut` (all), `krx_ut "[p0-3]"` (one defect), or `ctest` in the build folder |
 | FIX acceptance | `test/definitions/server/fix4*/` | `cd test && ./runat.sh 6666`, `./runat_threaded.sh 6666` |
-| Corpus replay | `test/krx/corpus/` | part of `ut` |
+| Seed replay | every I8/E8 message of the acceptance `.def` files, through the five fuzz modes (`FixInput`) | part of `krx_ut` |
 | Stress and chaos | `test/krx/stress.cpp`, `run_stress.sh` | `run_stress.sh <build> <seconds> <threads> <sessions> <port>`; `STRESS_SEED`, `STRESS_NO_ECHO`, `STRESS_FILELOG` |
 | Fuzzing | `test/krx/fuzz_message.cpp` (5 modes, incl. chunked `Parser`) | nightly 30 min in CI; 24 CPU-h per mode before a release |
 | Benchmark | `test/krx/bench.cpp` | before and after any send, store or socket change |
@@ -57,6 +58,9 @@ Writing a scenario:
   and the process keeps running", "[krx][p0-2]")`.
 - Drive a real `Session` through the socketpair fixture (`SessionPair.h`) rather than mocking
   it; the defects we fix live in the interaction between session, socket and store.
+- Put comparisons in double parentheses, `REQUIRE((reply == "A"))`, with an `INFO()` line for the
+  values: the house clang-tidy reads Catch2's `REQUIRE(a == b)` as a chained comparison
+  (`bugprone-chained-comparison`), and the double parentheses lose Catch2's own value printout.
 - No sleeps to wait for something; wait on a condition with a deadline.
 - Each scenario uses its own SessionID and store directory, so scenarios can run in parallel
   (quickfix-rs's `test_session.rs` crashed because two tests shared one).
