@@ -64,7 +64,8 @@ jobs:
           SANITIZE: ${{ matrix.sanitizer == 'address' && 'address,undefined' || 'thread' }}
         run: |
           flags="-fsanitize=$SANITIZE -fno-sanitize-recover=all -fno-omit-frame-pointer"
-          cmake . -DCMAKE_BUILD_TYPE=Debug -DQUICKFIX_EXAMPLES=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          # QUICKFIX_EXAMPLES stays on: it also builds `at`, the acceptance tests' FIX server.
+          cmake . -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$flags" "-DCMAKE_SHARED_LINKER_FLAGS=$flags"
           cmake --build . --parallel 4
       - name: Unit tests
@@ -72,10 +73,18 @@ jobs:
         run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
       - name: KRX scenarios
         run: ctest --output-on-failure -R krx_ut
+      # The runner keeps going when the server is gone ("Connection refused" per test), so fail at
+      # once without `at`, and cap each run.
       - name: Acceptance tests
         working-directory: ./test
-        run: ./runat.sh 6666
+        timeout-minutes: 30
+        run: |
+          test -x ./at || { echo "::error::test/at was not built"; exit 1; }
+          ./runat.sh 6666
       - name: Threaded acceptance tests
         if: matrix.sanitizer == 'address'
         working-directory: ./test
-        run: ./runat_threaded.sh 6667
+        timeout-minutes: 30
+        run: |
+          test -x ./at || { echo "::error::test/at was not built"; exit 1; }
+          ./runat_threaded.sh 6667
