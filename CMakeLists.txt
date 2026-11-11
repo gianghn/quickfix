@@ -8,6 +8,15 @@ message("-- Project name ${CMAKE_PROJECT_NAME}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
+# KRX fork: the house C++ policy in fork mode (.cpp-policy-fork, docs/MAINTENANCE.md). Its checker passes
+# HOUSE_POLICY_DIR; plain builds (quickfix-rs, CI) don't load it.
+set(HOUSE_FORK ON)
+if(HOUSE_POLICY_DIR)
+  # HouseFlags checks PIE support, which needs this policy; cmake_minimum_required above predates it.
+  cmake_policy(SET CMP0083 NEW)
+  include("${HOUSE_POLICY_DIR}/HouseFlags.cmake")
+endif()
+
 if( MSVC AND STATIC_RUNTIME )
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
   set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} /MT")
