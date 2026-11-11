@@ -73,18 +73,26 @@ jobs:
         run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
       - name: KRX scenarios
         run: ctest --output-on-failure -R krx_ut
+      # FIX.4.4 only here (the gateway's version; owner, 11 Nov 2026): the `test` job above runs every
+      # version, and runat.sh / runat_threaded.sh run them all under a sanitizer when needed.
       # The runner keeps going when the server is gone ("Connection refused" per test), so fail at
       # once without `at`, and cap each run.
-      - name: Acceptance tests
+      - name: Acceptance tests (FIX.4.4)
         working-directory: ./test
         timeout-minutes: 30
         run: |
           test -x ./at || { echo "::error::test/at was not built"; exit 1; }
-          ./runat.sh 6666
-      - name: Threaded acceptance tests
+          ./setup.sh 6666
+          ./at -f cfg/at.cfg &
+          trap 'kill $!' EXIT
+          ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix44/*.def
+      - name: Threaded acceptance tests (FIX.4.4)
         if: matrix.sanitizer == 'address'
         working-directory: ./test
         timeout-minutes: 30
         run: |
           test -x ./at || { echo "::error::test/at was not built"; exit 1; }
-          ./runat_threaded.sh 6667
+          ./setup.sh 6667
+          ./at -f cfg/at.cfg -t &
+          trap 'kill $!' EXIT
+          ruby -I. Runner.rb 127.0.0.1 6667 definitions/server/fix44/*.def
