@@ -46,4 +46,13 @@ UBSan reports, ~2.7 MB leaked, 1 failure). TSan: `ut`, `krx_ut`, FIX.4.4 accepta
 
 ## Mutation scores
 
-Filled by the Mull job (plan item 1.7), per critical function of docs/MAINTENANCE.md §4.
+Mull 0.35.0 (LLVM 18), the critical files in `mull.yml`, mutants killed by `krx_ut` and `ut`
+together (`test/krx/mutation-tests.sh`), 11 Nov 2026, Linux aarch64 in Docker:
+
+| Mutants read from | Mutants | Killed | Score |
+|---|---|---|---|
+| `krx_ut` (the engine code it links: session, socket threads, parser, message) | 158 | 94 | 59 % |
+
+`krx_ut` alone killed 24 %. The nightly CI run (`mutation` job) adds the mutants read from `ut`
+and reports both; per-function scores and the surviving mutants are in its annotations. The PR gate
+is 80 % on the lines a PR changes.

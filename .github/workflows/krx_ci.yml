@@ -8,6 +8,8 @@ on:
   pull_request:
     branches: ["krx/**"]
   workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *" # 01:00 in Vietnam: the full mutation run and the fuzzing below
 
 jobs:
   test:
@@ -96,3 +98,72 @@ jobs:
           ./at -f cfg/at.cfg -t &
           trap 'kill $!' EXIT
           ruby -I. Runner.rb 127.0.0.1 6667 definitions/server/fix44/*.def
+
+  # Plan item 1.7 (docs/MAINTENANCE.md §5): Mull on the critical files listed in mull.yml. On a PR
+  # only the lines it changes there are mutated, and krx_ut and ut together must kill at least 80 %
+  # of those mutants; the nightly run mutates every critical line and only reports the scores.
+  # Static linking puts in each test binary only the engine code it uses, so Mull reads the mutants
+  # from both binaries; test/krx/mutation-tests.sh runs both suites for each mutant either way.
+  mutation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      MULL_DEB: Mull-18-0.35.0-LLVM-18.1.3-ubuntu-amd64-24.04.deb
+      MULL_SHA256: b18ed37548077035fc14f267e33bb2bf1bb01379825af21d62db5a57d93adfe5
+      KRX_BUILD: ${{ github.workspace }}/build/mull
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install clang 18 and Mull 0.35.0 (pinned, checksum checked)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang-18
+          curl -sSLf -o mull.deb "https://github.com/mull-project/mull/releases/download/0.35.0/$MULL_DEB"
+          echo "$MULL_SHA256  mull.deb" | sha256sum -c -
+          sudo apt-get install -y -qq ./mull.deb
+      - name: On a PR, mutate only the lines it changes
+        if: github.event_name == 'pull_request'
+        run: |
+          printf 'gitDiffRef: origin/%s\ngitProjectRoot: %s\n' "$GITHUB_BASE_REF" "$PWD" >> mull.yml
+      - name: Build with the Mull plugin
+        run: |
+          CC=clang-18 CXX=clang++-18 cmake -S . -B "$KRX_BUILD" -DCMAKE_BUILD_TYPE=Debug \
+            -DQUICKFIX_EXAMPLES=OFF -DQUICKFIX_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            "-DCMAKE_CXX_FLAGS=-O0 -g -grecord-command-line -fpass-plugin=/usr/lib/mull-ir-frontend-18"
+          cmake --build "$KRX_BUILD" --target ut krx_ut --parallel 4
+      - name: Mutation testing
+        env:
+          GATE: ${{ github.event_name == 'pull_request' && '--mutation-score-threshold=80' || '--allow-surviving' }}
+        run: |
+          for binary in "$KRX_BUILD/src/C++/test/krx/krx_ut" "$KRX_BUILD/src/C++/test/ut"; do
+            mull-runner-18 --workers 4 --reporters IDE --reporters GitHubAnnotations "$GATE" \
+              --test-program test/krx/mutation-tests.sh "$binary"
+          done
+
+  # Plan item 1.7: libFuzzer over FixInput's five modes, 30 minutes a night, ASan on. A crash fails
+  # the job and its input is kept as an artifact: it becomes a red scenario, then a corpus file.
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang 18
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang-18 libclang-rt-18-dev
+      - name: Build krx_fuzz
+        run: |
+          flags="-fsanitize=address,fuzzer-no-link -g"
+          CC=clang-18 CXX=clang++-18 cmake -S . -B build/fuzz -DCMAKE_BUILD_TYPE=Debug -DKRX_FUZZ=ON \
+            -DQUICKFIX_EXAMPLES=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 "-DCMAKE_CXX_FLAGS=$flags" \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address
+          cmake --build build/fuzz --target krx_fuzz --parallel 4
+      - name: Fuzz for 30 minutes
+        run: |
+          mkdir -p fuzz-corpus fuzz-crashes
+          build/fuzz/src/C++/test/krx/krx_fuzz -max_total_time=1800 -artifact_prefix=fuzz-crashes/ fuzz-corpus
+      - name: Keep the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: fuzz-crashes/
