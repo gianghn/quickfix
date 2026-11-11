@@ -8,6 +8,8 @@ Upstream picks keep their upstream tests in `ut`.
 | Scenario file | Tags | Checklist rows | Steps / fixtures | Runner | Phase |
 |---|---|---|---|---|---|
 | `src/C++/test/krx/HarnessScenarios.cpp` | `[krx][v1][harness]` | 1.1–1.3 | `SessionPair.h`, `FixInput.h` | Catch2 `krx_ut` | 1 |
+| `src/C++/test/krx/DictionaryScenarios.cpp` | `[krx][v1][k-3]` | 1.4 | — | Catch2 `krx_ut` (+ LSan on Linux) | 1 |
+| `src/C++/test/krx/FieldAccessScenarios.cpp` | `[krx][v1][p2-5]` | 1.5 | — | Catch2 `krx_ut` (+ UBSan on Linux) | 1 |
 | `src/C++/test/krx/InboundFramingScenarios.cpp` | `[krx][v1][security]` + defect tag | 2.1–2.15 | `SessionPair.h`, `FixInput.h`, `test/krx/corpus/` | Catch2 `krx_ut` | 2 |
 | `src/C++/test/krx/SocketLivenessScenarios.cpp` | `[krx][v1][security]` + defect tag | 3.1–3.11 | `SessionPair.h`, `StalledPeer.h` | Catch2 `krx_ut` | 3 |
 | `src/C++/test/krx/StoreDurabilityScenarios.cpp` | `[krx][v1]` + defect tag | 4.1–4.6 | `FaultyFile.h` (RLIMIT_FSIZE, read-only dir) | Catch2 `krx_ut` | 4 |

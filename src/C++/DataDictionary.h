@@ -107,7 +107,8 @@ class DataDictionary
   // 1) avoids memory copying;
   // 2) first lookup is done by comparing integers and not string objects
   // TODO: use hash_map with good hashing algorithm
-  typedef std::map <std::string, std::pair<int, DataDictionary*>> FieldPresenceMap;
+  // KRX fork (K-3): each group's dictionary is owned here, so replacing or clearing one frees it.
+  using FieldPresenceMap = std::map <std::string, std::pair<int, std::unique_ptr<DataDictionary>>>;
   typedef std::map <int, FieldPresenceMap> FieldToGroup;
 
 public:
@@ -315,11 +316,11 @@ public:
   void addGroup( const std::string& msg, int field, int delim,
                  const DataDictionary& dataDictionary )
   {
-    DataDictionary * pDD = new DataDictionary( dataDictionary );
+    auto pDD = std::make_unique<DataDictionary>( dataDictionary );
     pDD->setVersion( getVersion() );
 
     FieldPresenceMap& presenceMap = m_groups[ field ];
-    presenceMap[ msg ] = std::make_pair( delim, pDD );
+    presenceMap[ msg ] = std::make_pair( delim, std::move( pDD ) );
   }
 
   bool isGroup( const std::string& msg, int field ) const
@@ -344,9 +345,8 @@ public:
     FieldPresenceMap::const_iterator iter = presenceMap.find( msg );
     if( iter == presenceMap.end() ) return false;
 
-    std::pair<int, DataDictionary*> pair = iter->second;
-    delim = pair.first;
-    pDataDictionary = pair.second;
+    delim = iter->second.first;
+    pDataDictionary = iter->second.second.get();
     return true;
   }
 
