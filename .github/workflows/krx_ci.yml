@@ -34,3 +34,5 @@ jobs:
       - name: Acceptance tests
         working-directory: ./test
         run: ./runat.sh 6666
+      - name: KRX scenarios (docs/V1_BDD_CHECKLIST.md)
+        run: ctest --output-on-failure -R krx_ut

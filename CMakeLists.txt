@@ -84,6 +84,14 @@ endif ()
 
 add_subdirectory(src)
 
+# KRX fork: its own scenarios (src/C++/test/krx), with Catch2 built as third-party code.
+if (QUICKFIX_TESTS)
+  enable_testing()
+  add_library(krx_catch STATIC src/C++/test/catch_amalgamated.cpp)
+  target_include_directories(krx_catch SYSTEM PUBLIC src/C++/test)
+  add_subdirectory(src/C++/test/krx)
+endif()
+
 if (QUICKFIX_EXAMPLES)
   add_subdirectory(examples)
 endif()
