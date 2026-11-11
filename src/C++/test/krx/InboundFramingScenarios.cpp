@@ -161,11 +161,12 @@ SCENARIO("A SequenceReset before Logon ends the connection and not the process",
 SCENARIO("A SequenceReset to the expected number before Logon changes nothing",
          "[krx][v1][security][p0-2]") {
   GIVEN("a session that has not received a Logon") {
-    const krx::SessionPair pair("KRXSE25");
-    WHEN("the counterparty resets to the number the session expects, then logs on") {
+    krx::SessionPair pair("KRXSE25");
+    WHEN("the counterparty resets to the number the session expects") {
       pair.Write(SequenceReset(pair, 1, 1));
-      pair.Write(pair.Logon(1));
-      THEN("the session logs on") {
+      THEN("the connection stays open and a Logon still logs on") {
+        REQUIRE_FALSE(pair.WaitClosed(std::chrono::milliseconds(500)));
+        pair.Write(pair.Logon(1));
         REQUIRE(pair.WaitLoggedOn(kWait));
       }
     }

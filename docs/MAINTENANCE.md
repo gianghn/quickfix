@@ -143,6 +143,11 @@ Line coverage says a line ran; a mutation run says a test would notice if it wer
   in the PR as equivalent with a one-line reason. Never lower the gate to pass.
 - **Mutators:** Mull's defaults plus `cxx_remove_void_call` (drops `fflush`, `clearerr`, unlock
   calls) and boundary mutators (`<` ↔ `<=`): those are where our P0s were.
+- **Known Mull artifact:** on a line like `m_state.onEvent( e.what() )` (a call taking a temporary
+  `std::string`), `cxx_remove_void_call` removes the temporary's destructor, not the call, and is
+  reported as the call surviving; no test can kill it (a leak). Found on PR #20: the same mutant
+  applied by hand failed the test. In new code, pass a named string
+  (`const std::string event = e.what(); m_state.onEvent( event );`), which Mull leaves alone.
 - Record scores per function in `test/krx/BASELINE.md`; a score may not drop between releases.
 
 ## 6. Sanitizers, static analysis and fuzzing

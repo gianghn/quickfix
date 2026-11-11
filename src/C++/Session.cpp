@@ -185,9 +185,11 @@ void Session::next( const UtcTimeStamp& now )
     disconnect();
   }
   // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  // The event is a named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
   catch ( std::exception& e )
   {
-    m_state.onEvent( e.what() );
+    const std::string event = e.what();
+    m_state.onEvent( event );
     disconnect();
   }
 }
@@ -378,7 +380,8 @@ void Session::nextSequenceReset( const Message& sequenceReset, const UtcTimeStam
     else if ( newSeqNo < getExpectedTargetNum() && !m_state.receivedLogon() )
     {
       // KRX fork (P0-2): a reject needs a Logon, and generateReject throws without one.
-      m_state.onEvent( "SequenceReset before Logon moves the sequence number back: disconnecting" );
+      const std::string event = "SequenceReset before Logon moves the sequence number back: disconnecting";
+      m_state.onEvent( event );
       disconnect();
     }
     else if ( newSeqNo < getExpectedTargetNum() )
@@ -1439,9 +1442,11 @@ void Session::next( const Message& message, const UtcTimeStamp& now, bool queued
     disconnect();
   }
   // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  // The event is a named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
   catch ( std::exception& e )
   {
-    m_state.onEvent( e.what() );
+    const std::string event = e.what();
+    m_state.onEvent( event );
     disconnect();
   }
 
