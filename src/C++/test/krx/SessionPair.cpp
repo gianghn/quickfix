@@ -49,7 +49,7 @@ FIX::TimeRange AllDay() {
 SessionPair::SessionPair(const std::string& counterparty)
     : id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
       session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_, Fix44Provider(),
-               AllDay(), kAcceptor, nullptr) {
+               AllDay(), kAcceptor, &logs_) {
   const auto [ours, theirs] = FIX::socket_createpair();
   peer_ = theirs;
   connection_ = std::make_unique<FIX::ThreadedSocketConnection>(
@@ -118,16 +118,51 @@ bool SessionPair::WaitLoggedOn(std::chrono::milliseconds timeout) const {
   return true;
 }
 
-std::string SessionPair::Logon(int seq_num) const {
+bool SessionPair::WaitClosed(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (true) {
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (left.count() <= 0) {
+      return false;
+    }
+    pollfd ready{.fd = peer_, .events = POLLIN, .revents = 0};
+    if (poll(&ready, 1, static_cast<int>(std::min(left, kLongestPoll).count())) <= 0) {
+      return false;
+    }
+    std::array<char, 4096> buffer{};
+    if (FIX::socket_recv(peer_, buffer.data(), buffer.size()) <= 0) {
+      return true;
+    }
+  }
+}
+
+std::string SessionPair::Logon(int seq_num, int heart_bt_int) const {
   FIX44::Logon logon;
   logon.set(FIX::EncryptMethod(FIX::EncryptMethod_NONE_OTHER));
-  logon.set(FIX::HeartBtInt(30));
-  FIX::Header& header = logon.getHeader();
+  logon.set(FIX::HeartBtInt(heart_bt_int));
+  return FromCounterparty(logon, seq_num);
+}
+
+std::string SessionPair::FromCounterparty(FIX::Message message, int seq_num) const {
+  FIX::Header& header = message.getHeader();
+  header.setField(FIX::BeginString(kFix44));
   header.setField(FIX::SenderCompID(id_.getTargetCompID()));
   header.setField(FIX::TargetCompID(id_.getSenderCompID()));
   header.setField(FIX::MsgSeqNum(seq_num));
   header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
-  return logon.toString();
+  return message.toString();
+}
+
+bool EventLog::Contains(std::string_view text) const {
+  const std::scoped_lock lock(mutex_);
+  return std::ranges::any_of(events_,
+                             [text](const std::string& event) { return event.contains(text); });
+}
+
+void EventLog::onEvent(const std::string& text) {
+  const std::scoped_lock lock(mutex_);
+  events_.push_back(text);
 }
 
 std::string MsgTypeOf(const std::string& frame) {

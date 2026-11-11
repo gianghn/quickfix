@@ -148,7 +148,8 @@ bool ThreadedSocketConnection::read()
     processStream();
     return true;
   }
-  catch ( SocketRecvFailed& e )
+  // KRX fork (P0-2): not only SocketRecvFailed; any error ends this connection, never the process.
+  catch ( std::exception& e )
   {
     if( m_disconnect )
       return false;

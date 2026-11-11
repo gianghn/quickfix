@@ -184,6 +184,12 @@ void Session::next( const UtcTimeStamp& now )
     m_state.onEvent( e.what() );
     disconnect();
   }
+  // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  catch ( std::exception& e )
+  {
+    m_state.onEvent( e.what() );
+    disconnect();
+  }
 }
 
 void Session::nextLogon( const Message& logon, const UtcTimeStamp& now )
@@ -369,6 +375,12 @@ void Session::nextSequenceReset( const Message& sequenceReset, const UtcTimeStam
 
     if ( newSeqNo > getExpectedTargetNum() )
       m_state.setNextTargetMsgSeqNum( MsgSeqNum( newSeqNo ) );
+    else if ( newSeqNo < getExpectedTargetNum() && !m_state.receivedLogon() )
+    {
+      // KRX fork (P0-2): a reject needs a Logon, and generateReject throws without one.
+      m_state.onEvent( "SequenceReset before Logon moves the sequence number back: disconnecting" );
+      disconnect();
+    }
     else if ( newSeqNo < getExpectedTargetNum() )
       generateReject( sequenceReset, SessionRejectReason_VALUE_IS_INCORRECT );
   }
@@ -1422,6 +1434,12 @@ void Session::next( const Message& message, const UtcTimeStamp& now, bool queued
     }
   }
   catch ( IOException& e )
+  {
+    m_state.onEvent( e.what() );
+    disconnect();
+  }
+  // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  catch ( std::exception& e )
   {
     m_state.onEvent( e.what() );
     disconnect();
