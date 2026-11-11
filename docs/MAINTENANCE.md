@@ -127,12 +127,17 @@ a new class shows up (from a bug, a fuzz finding or a surviving mutant).
 
 Line coverage says a line ran; a mutation run says a test would notice if it were wrong.
 
-- **Tool:** Mull (LLVM) on a clang build: compile with `-fpass-plugin=<mull-ir-frontend>`,
-  `-g -O0`, and a `mull.yml` listing the critical files of section 4; run
-  `mull-runner ./test/ut -- --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec "[krx]"`
-  (plus the plain unit suite). quickfix-rs uses `cargo mutants -f quickfix/src/application.rs`.
-- **When:** on every PR that changes a critical function, limited to the changed functions
-  (`--git-diff-ref=origin/krx/main`); a full critical-file run before each release tag.
+- **Tool:** Mull 0.35.0 for LLVM 18 (pinned `.deb`, SHA-256 checked; Linux only) on a clang-18
+  build with `-O0 -g -grecord-command-line -fpass-plugin=/usr/lib/mull-ir-frontend-18` and a
+  static engine (`-DQUICKFIX_SHARED_LIBS=OFF`: Mull only sees code inside the test binary).
+  `mull.yml` lists the critical files of section 4. Run
+  `mull-runner-18 --test-program test/krx/mutation-tests.sh <krx_ut or ut>`: the script runs both
+  suites (each with a time limit, so a looping mutant counts as killed), and Mull reads the
+  mutants from each binary in turn (each links only the engine code it uses). The CI job
+  `mutation` does exactly this. quickfix-rs uses `cargo mutants -f quickfix/src/application.rs`.
+- **When:** on every PR, only the critical lines it changes (`gitDiffRef` in `mull.yml`, set by
+  the CI job), gated at 80 %; nightly over every critical line, reported; a full run before each
+  release tag.
 - **Gate:** mutation score ≥ 80 % on each changed critical function. Every surviving mutant is
   either killed by a new test (usually a missing edge case: add it to the table too) or written
   in the PR as equivalent with a one-line reason. Never lower the gate to pass.

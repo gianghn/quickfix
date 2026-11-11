@@ -1,0 +1,7 @@
+# Mull mutation testing (docs/MAINTENANCE.md §5, plan item 1.7): only the critical files of §4.
+mutators:
+  - cxx_default
+  - cxx_remove_void_call # drops fflush, clearerr, unlock calls: where several P0s live
+includePaths:
+  - '.*/src/C\+\+/(Parser|Message|Session|SessionState|FileStore|ThreadedSocketConnection|ThreadedSocketAcceptor|ThreadedSocketInitiator)\.(cpp|h)$'
+timeout: 20000
