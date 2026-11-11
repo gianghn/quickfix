@@ -44,6 +44,8 @@ public:
   EXCEPT ( MessageParseError );
   bool readFixMessage( std::string& str )
   EXCEPT ( MessageParseError );
+  // KRX fork (P0-7): the next whole message, garbled frames skipped; false when more bytes are needed.
+  bool readNextFixMessage( std::string& str );
 
   void addToStream( const char* str, size_t len )
   { m_buffer.append( str, len ); }
