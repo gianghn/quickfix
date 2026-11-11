@@ -184,6 +184,14 @@ void Session::next( const UtcTimeStamp& now )
     m_state.onEvent( e.what() );
     disconnect();
   }
+  // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  // The event is a named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+  catch ( std::exception& e )
+  {
+    const std::string event = e.what();
+    m_state.onEvent( event );
+    disconnect();
+  }
 }
 
 void Session::nextLogon( const Message& logon, const UtcTimeStamp& now )
@@ -369,6 +377,13 @@ void Session::nextSequenceReset( const Message& sequenceReset, const UtcTimeStam
 
     if ( newSeqNo > getExpectedTargetNum() )
       m_state.setNextTargetMsgSeqNum( MsgSeqNum( newSeqNo ) );
+    else if ( newSeqNo < getExpectedTargetNum() && !m_state.receivedLogon() )
+    {
+      // KRX fork (P0-2): a reject needs a Logon, and generateReject throws without one.
+      const std::string event = "SequenceReset before Logon moves the sequence number back: disconnecting";
+      m_state.onEvent( event );
+      disconnect();
+    }
     else if ( newSeqNo < getExpectedTargetNum() )
       generateReject( sequenceReset, SessionRejectReason_VALUE_IS_INCORRECT );
   }
@@ -1424,6 +1439,14 @@ void Session::next( const Message& message, const UtcTimeStamp& now, bool queued
   catch ( IOException& e )
   {
     m_state.onEvent( e.what() );
+    disconnect();
+  }
+  // KRX fork (P0-2): any other error, an application callback's included, ends this connection only.
+  // The event is a named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+  catch ( std::exception& e )
+  {
+    const std::string event = e.what();
+    m_state.onEvent( event );
     disconnect();
   }
 

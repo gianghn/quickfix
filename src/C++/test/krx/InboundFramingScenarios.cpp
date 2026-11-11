@@ -1,6 +1,8 @@
 // Rows 2.1-2.4 of docs/V1_BDD_CHECKLIST.md (P0-1): a data field's length comes from the wire, so a
 // forged one must be rejected as an invalid message instead of moving the parser past the buffer.
 // Out-of-bounds reads show as wrong results here and as reports under AddressSanitizer (Linux CI).
+// Rows 2.5-2.7 (P0-2): an error while a message is handled ends that connection, never the process.
+#include <chrono>
 #include <cstddef>
 #include <fstream>
 #include <iterator>
@@ -13,8 +15,44 @@
 #include "FixFields.h"
 #include "FixInput.h"
 #include "Message.h"
+#include "SessionPair.h"
 
 namespace {
+
+constexpr std::chrono::seconds kWait{5};
+
+// A SequenceReset (reset mode) from the counterparty: its next sequence number is new_seq_no.
+std::string SequenceReset(const krx::SessionPair& pair, int seq_num, int new_seq_no) {
+  FIX::Message reset;
+  reset.getHeader().setField(FIX::MsgType("4"));  // SequenceReset
+  reset.setField(FIX::NewSeqNo(new_seq_no));
+  return pair.FromCounterparty(reset, seq_num);
+}
+
+// An application message every FIX.4.4 session accepts: a BusinessMessageReject of an order.
+std::string BusinessReject(const krx::SessionPair& pair, int seq_num) {
+  FIX::Message reject;
+  reject.getHeader().setField(FIX::MsgType("j"));  // BusinessMessageReject
+  reject.setField(FIX::RefMsgType("D"));
+  reject.setField(FIX::BusinessRejectReason(0));
+  return pair.FromCounterparty(reject, seq_num);
+}
+
+// The counterparty logs on with sequence number 1; the session answers with its own Logon.
+void LogOn(krx::SessionPair& pair, int heart_bt_int = 30) {
+  pair.Write(pair.Logon(1, heart_bt_int));
+  REQUIRE(pair.WaitLoggedOn(kWait));
+  const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+  INFO(answer);
+  REQUIRE((answer == "A"));
+}
+
+std::string TestRequest(const krx::SessionPair& pair, int seq_num) {
+  FIX::Message request;
+  request.getHeader().setField(FIX::MsgType("1"));  // TestRequest
+  request.setField(FIX::TestReqID("still-there"));
+  return pair.FromCounterparty(request, seq_num);
+}
 
 std::string Fix44() {
   return std::string(KRX_SPEC_DIR) + "/FIX44.xml";
@@ -101,6 +139,103 @@ SCENARIO("An empty data field with length 0 still parses", "[krx][v1][security][
         const std::string& data = parsed.getField(FIX::FIELD::RawData);
         INFO(data);
         REQUIRE(data.empty());
+      }
+    }
+  }
+}
+
+SCENARIO("A SequenceReset before Logon ends the connection and not the process",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("a session that has not received a Logon") {
+    krx::SessionPair pair("KRXSR25");
+    WHEN("the counterparty sends a SequenceReset moving its sequence number back") {
+      pair.Write(SequenceReset(pair, 1, 0));
+      THEN("the session logs it and closes the connection") {
+        REQUIRE(pair.WaitClosed(kWait));
+        REQUIRE(pair.Events().Contains("before Logon"));
+      }
+    }
+  }
+}
+
+SCENARIO("A SequenceReset to the expected number before Logon changes nothing",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("a session that has not received a Logon") {
+    krx::SessionPair pair("KRXSE25");
+    WHEN("the counterparty resets to the number the session expects") {
+      pair.Write(SequenceReset(pair, 1, 1));
+      THEN("the connection stays open and a Logon still logs on") {
+        REQUIRE_FALSE(pair.WaitClosed(std::chrono::milliseconds(500)));
+        pair.Write(pair.Logon(1));
+        REQUIRE(pair.WaitLoggedOn(kWait));
+      }
+    }
+  }
+}
+
+SCENARIO("A SequenceReset moving back after Logon is rejected and the session stays",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("a logged-on session expecting sequence number 2") {
+    krx::SessionPair pair("KRXSL25");
+    LogOn(pair);
+    WHEN("the counterparty sends a SequenceReset back to 1") {
+      pair.Write(SequenceReset(pair, 2, 1));
+      THEN("the session answers with a Reject") {
+        const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "3"));
+      }
+    }
+  }
+}
+
+SCENARIO("An error raised in fromApp disconnects the session and is logged",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("a logged-on session whose fromApp throws a std::runtime_error") {
+    krx::SessionPair pair("KRXFA26");
+    pair.ThrowFromApp();
+    LogOn(pair);
+    WHEN("an application message arrives") {
+      pair.Write(BusinessReject(pair, 2));
+      THEN("the session logs the error and closes the connection") {
+        REQUIRE(pair.WaitClosed(kWait));
+        REQUIRE(pair.Events().Contains("gateway callback failed"));
+      }
+    }
+  }
+}
+
+SCENARIO("An error in one connection thread disconnects only that session",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("two logged-on sessions, the first with a fromApp that throws") {
+    krx::SessionPair failing("KRXF27");
+    krx::SessionPair healthy("KRXH27");
+    failing.ThrowFromApp();
+    LogOn(failing);
+    LogOn(healthy);
+    WHEN("the first session's fromApp throws") {
+      failing.Write(BusinessReject(failing, 2));
+      REQUIRE(failing.WaitClosed(kWait));
+      THEN("the second session still answers a TestRequest with a Heartbeat") {
+        healthy.Write(TestRequest(healthy, 2));
+        const std::string answer = krx::MsgTypeOf(healthy.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "0"));
+      }
+    }
+  }
+}
+
+SCENARIO("An error while the session sends a heartbeat ends the connection",
+         "[krx][v1][security][p0-2]") {
+  GIVEN("a logged-on session with a 1-second heartbeat whose toAdmin then throws") {
+    krx::SessionPair pair("KRXHB27");
+    LogOn(pair, 1);
+    pair.ThrowFromAdmin();
+    WHEN("the heartbeat falls due") {
+      THEN("the session logs the error and closes the connection") {
+        REQUIRE(pair.WaitClosed(kWait));
+        REQUIRE(pair.Events().Contains("gateway admin callback failed"));
       }
     }
   }
