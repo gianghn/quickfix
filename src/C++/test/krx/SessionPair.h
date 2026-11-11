@@ -149,9 +149,6 @@ class SessionPair {
 
   void ThrowFromAdmin() { application_.ThrowFromAdmin(); }
 
-  // The session sends `message` to the counterparty, as the gateway would.
-  void SendFromSession(FIX::Message message) const;
-
  private:
   LogonWatcher application_;
   EventLogFactory logs_;

@@ -68,6 +68,21 @@ std::string StoredWithoutMsgType(const std::string& counterparty, int seq_num) {
   return stored.toString();
 }
 
+// An application message the session sent: a BusinessMessageReject of an order.
+std::string StoredBusinessReject(const std::string& counterparty, int seq_num) {
+  FIX::Message stored;
+  FIX::Header& header = stored.getHeader();
+  header.setField(FIX::BeginString("FIX.4.4"));
+  header.setField(FIX::MsgType("j"));
+  header.setField(FIX::SenderCompID("KRXGW"));
+  header.setField(FIX::TargetCompID(counterparty));
+  header.setField(FIX::MsgSeqNum(seq_num));
+  header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+  stored.setField(FIX::RefMsgType("D"));
+  stored.setField(FIX::BusinessRejectReason(0));
+  return stored.toString();
+}
+
 // A FIX.4.4 Heartbeat whose body is exactly `length` bytes, padded with a Text field.
 std::string FrameWithBodyOf(std::size_t length) {
   const std::string head = "35=0\00158=";
@@ -113,6 +128,17 @@ void LogOn(krx::SessionPair& pair, int heart_bt_int = 30) {
   const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
   INFO(answer);
   REQUIRE((answer == "A"));
+}
+
+// The session's answer to a ResendRequest for its stored application message 5.
+std::string ResentMessage5(const std::string& counterparty, bool preserve_field_order) {
+  krx::PairOptions options;
+  options.preserve_field_order = preserve_field_order;
+  options.stored_messages[5] = StoredBusinessReject(counterparty, 5);
+  krx::SessionPair pair(counterparty, options);
+  LogOn(pair);
+  pair.Write(ResendRequest(pair, 2, 5, 0));
+  return pair.ReadFrame(kWait);
 }
 
 std::string TestRequest(const krx::SessionPair& pair, int seq_num) {
@@ -481,20 +507,23 @@ SCENARIO("A ResendRequest whose begin is after its end is rejected", "[krx][v1][
 }
 
 SCENARIO("A ResendRequest with end 0 resends everything from begin", "[krx][v1][security][p1-11]") {
-  GIVEN("a logged-on session that has sent one application message, number 2") {
-    krx::SessionPair pair("KRXR214");
-    LogOn(pair);
-    FIX::Message order_reject;
-    order_reject.getHeader().setField(FIX::MsgType("j"));  // BusinessMessageReject
-    order_reject.setField(FIX::RefMsgType("D"));
-    order_reject.setField(FIX::BusinessRejectReason(0));
-    pair.SendFromSession(order_reject);
-    const std::string sent = krx::MsgTypeOf(pair.ReadFrame(kWait));
-    REQUIRE((sent == "j"));
-    WHEN("the counterparty asks for a resend from 2 to 0") {
-      pair.Write(ResendRequest(pair, 2, 2, 0));
-      const std::string again = pair.ReadFrame(kWait);
-      THEN("message 2 comes again, marked as a possible duplicate") {
+  GIVEN("a logged-on session whose message 5 was an application message") {
+    WHEN("the counterparty asks for a resend from 5 to 0") {
+      const std::string again = ResentMessage5("KRXR214", false);
+      THEN("message 5 comes again, marked as a possible duplicate") {
+        INFO(again);
+        REQUIRE((krx::MsgTypeOf(again) == "j" && again.contains("\00143=Y\001")));
+      }
+    }
+  }
+}
+
+SCENARIO("A resend with field order preserved resends a stored application message",
+         "[krx][v1][security][p2-4]") {
+  GIVEN("a session preserving field order, whose message 5 was an application message") {
+    WHEN("the counterparty asks for a resend from 5 to 0") {
+      const std::string again = ResentMessage5("KRXP21P", true);
+      THEN("message 5 comes again, marked as a possible duplicate") {
         INFO(again);
         REQUIRE((krx::MsgTypeOf(again) == "j" && again.contains("\00143=Y\001")));
       }

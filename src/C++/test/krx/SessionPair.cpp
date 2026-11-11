@@ -163,10 +163,6 @@ std::string SessionPair::FromCounterparty(FIX::Message message, int seq_num) con
   return message.toString();
 }
 
-void SessionPair::SendFromSession(FIX::Message message) const {
-  FIX::Session::sendToTarget(message, id_);
-}
-
 bool EventLog::Contains(std::string_view text) const {
   const std::scoped_lock lock(mutex_);
   return std::ranges::any_of(events_,
