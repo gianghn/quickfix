@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,3 +31,6 @@ struct FixDictionaries {
 [[nodiscard]] std::vector<std::string> SeedsFromDefinitions(const std::string& definitions_dir);
 
 }  // namespace krx
+
+// The libFuzzer entry point (FuzzEntry.cpp, target krx_fuzz).
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size);
