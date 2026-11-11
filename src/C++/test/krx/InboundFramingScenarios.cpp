@@ -310,6 +310,37 @@ SCENARIO("Good frames around a garbled one are each read once", "[krx][v1][secur
   }
 }
 
+SCENARIO("A frame whose second field is not BodyLength is rejected as soon as it shows",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("just the BeginString and the first three bytes of a MsgType field") {
+    FIX::Parser parser;
+    parser.addToStream(std::string("8=FIX.4.2\00135"));
+    THEN("reading it throws, without waiting for more bytes") {
+      std::string message;
+      REQUIRE_THROWS_AS(parser.readFixMessage(message), FIX::MessageParseError);
+    }
+  }
+}
+
+SCENARIO("A frame start that arrives with the garbled frame before it is kept",
+         "[krx][v1][security][p0-7]") {
+  GIVEN("a garbled frame and the first byte of a good frame in one read, the rest in the next") {
+    const std::string good = kGoodFrame;
+    FIX::Parser parser;
+    parser.addToStream(std::string("8=FIX.4.2\0019=A\001") + good.front());
+    std::string message;
+    const bool early = parser.readNextFixMessage(message);
+    WHEN("the rest of the good frame arrives") {
+      parser.addToStream(good.substr(1));
+      const bool read = parser.readNextFixMessage(message);
+      THEN("the good frame is read, whole") {
+        INFO(message);
+        REQUIRE((!early && read && message == good));
+      }
+    }
+  }
+}
+
 SCENARIO("After a garbled frame the next good message is processed", "[krx][v1][security][p0-7]") {
   GIVEN("a logged-on session") {
     krx::SessionPair pair("KRXG28");

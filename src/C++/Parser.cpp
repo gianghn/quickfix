@@ -92,10 +92,10 @@ EXCEPT ( MessageParseError )
   }
   catch( MessageParseError& e )
   {
-    // KRX fork (P0-7): drop this frame only, up to the next one, instead of every frame queued
-    // behind it. With no next frame yet, keep two bytes that may be its "\0018" start.
+    // KRX fork (P0-7): drop this frame only, up to the SOH before the next one, instead of every
+    // frame queued behind it. With no next frame yet, keep two bytes that may be its "\0018" start.
     const std::string::size_type next = m_buffer.find( "\0018=" );
-    m_buffer.erase( 0, next != std::string::npos ? next + 1 : m_buffer.size() - 2 );
+    m_buffer.erase( 0, next != std::string::npos ? next : m_buffer.size() - 2 );
     throw e;
   }
 
