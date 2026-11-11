@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -96,12 +97,33 @@ class LogonWatcher : public FIX::Application {
   std::atomic<bool> throw_from_admin_{false};
 };
 
+// Keeps the one MemoryStore it creates, so a test can seed it before the session runs.
+class KeptStoreFactory : public FIX::MemoryStoreFactory {
+ public:
+  [[nodiscard]] FIX::MessageStore* Store() const { return store_; }
+
+  FIX::MessageStore* create(const FIX::UtcTimeStamp& now, const FIX::SessionID& id) override {
+    store_ = FIX::MemoryStoreFactory::create(now, id);
+    return store_;
+  }
+
+ private:
+  FIX::MessageStore* store_{nullptr};
+};
+
+// How a SessionPair is set up: the dictionary's PreserveMessageFieldsOrder, and messages stored by
+// sequence number before the session runs (the next one it sends follows the last).
+struct PairOptions {
+  bool preserve_field_order{false};
+  std::map<int, std::string> stored_messages;
+};
+
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
 // The real ThreadedSocketConnection reads, parses and answers, with no network. Sessions live in a
 // process-wide registry, so every pair needs its own counterparty comp ID.
 class SessionPair {
  public:
-  explicit SessionPair(const std::string& counterparty);
+  explicit SessionPair(const std::string& counterparty, const PairOptions& options = {});
   ~SessionPair();
   SessionPair(const SessionPair&) = delete;
   SessionPair& operator=(const SessionPair&) = delete;
@@ -130,7 +152,7 @@ class SessionPair {
  private:
   LogonWatcher application_;
   EventLogFactory logs_;
-  FIX::MemoryStoreFactory store_;
+  KeptStoreFactory store_;
   FIX::SessionID id_;
   FIX::Session session_;
   FIX::socket_handle peer_{-1};
