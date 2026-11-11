@@ -1,18 +1,19 @@
 # V1 feature-files plan
 
 Where each row of [V1_BDD_CHECKLIST.md](V1_BDD_CHECKLIST.md) lives. Library scenarios are Catch2
-`SCENARIO`s tagged like Gherkin (`[krx][v1][p0-1]`), so `ut "[krx]"` runs them all and
-`ut "[p0-3]"` runs one defect's.
+`SCENARIO`s in our own target `krx_ut` (house policy, `house_target`), tagged like Gherkin
+(`[krx][v1][p0-1]`): `krx_ut` runs them all (ctest does too), `krx_ut "[p0-3]"` one defect's.
+Upstream picks keep their upstream tests in `ut`.
 
 | Scenario file | Tags | Checklist rows | Steps / fixtures | Runner | Phase |
 |---|---|---|---|---|---|
-| `src/C++/test/krx/HarnessScenarios.cpp` | `[krx][v1][harness]` | 1.1–1.3 | `src/C++/test/krx/SessionPair.h` | Catch2 `ut` | 1 |
-| `src/C++/test/krx/InboundFramingScenarios.cpp` | `[krx][v1][security]` + defect tag | 2.1–2.15 | `SessionPair.h`, `test/krx/corpus/` | Catch2 `ut` | 2 |
-| `src/C++/test/krx/SocketLivenessScenarios.cpp` | `[krx][v1][security]` + defect tag | 3.1–3.11 | `SessionPair.h`, `StalledPeer.h` | Catch2 `ut` | 3 |
-| `src/C++/test/krx/StoreDurabilityScenarios.cpp` | `[krx][v1]` + defect tag | 4.1–4.6 | `FaultyFile.h` (RLIMIT_FSIZE, read-only dir) | Catch2 `ut` | 4 |
-| `src/C++/test/krx/SendTruthScenarios.cpp` | `[krx][v1]` + defect tag | 5.1–5.5 | `SessionPair.h` | Catch2 `ut` | 5 |
-| `src/C++/test/krx/TeardownRaceScenarios.cpp` | `[krx][v1][tsan]` + defect tag | 6.1–6.6 | `SessionPair.h` | Catch2 `ut` (TSan job) | 6 |
-| `src/C++/test/krx/UpstreamPicksScenarios.cpp` | `[krx][v1][upstream]` | 7.1–7.6 | upstream tests as picked | Catch2 `ut` | 7 |
+| `src/C++/test/krx/HarnessScenarios.cpp` | `[krx][v1][harness]` | 1.1–1.3 | `SessionPair.h`, `FixInput.h` | Catch2 `krx_ut` | 1 |
+| `src/C++/test/krx/InboundFramingScenarios.cpp` | `[krx][v1][security]` + defect tag | 2.1–2.15 | `SessionPair.h`, `FixInput.h`, `test/krx/corpus/` | Catch2 `krx_ut` | 2 |
+| `src/C++/test/krx/SocketLivenessScenarios.cpp` | `[krx][v1][security]` + defect tag | 3.1–3.11 | `SessionPair.h`, `StalledPeer.h` | Catch2 `krx_ut` | 3 |
+| `src/C++/test/krx/StoreDurabilityScenarios.cpp` | `[krx][v1]` + defect tag | 4.1–4.6 | `FaultyFile.h` (RLIMIT_FSIZE, read-only dir) | Catch2 `krx_ut` | 4 |
+| `src/C++/test/krx/SendTruthScenarios.cpp` | `[krx][v1]` + defect tag | 5.1–5.5 | `SessionPair.h` | Catch2 `krx_ut` | 5 |
+| `src/C++/test/krx/TeardownRaceScenarios.cpp` | `[krx][v1][tsan]` + defect tag | 6.1–6.6 | `SessionPair.h` | Catch2 `krx_ut` (TSan job) | 6 |
+| `src/C++/test/krx/UpstreamPicksScenarios.cpp` | `[krx][v1][upstream]` | 7.1–7.6 | upstream tests as picked | Catch2 `krx_ut`, `ut` | 7 |
 | `quickfix/tests/test_callback_panic.rs` (quickfix-rs) | — | 9.1–9.3 | — | `cargo test` | 9 |
 | `tests/features/order_safety.feature` (gateway) | `@krx @v1 @order` | 10.1–10.6 | gateway steps | cucumber-rs | 10 |
 | `tests/features/callback_discipline.feature` (gateway) | `@krx @v1 @concurrency` | 10.7 | gateway steps | cucumber-rs | 10 |
