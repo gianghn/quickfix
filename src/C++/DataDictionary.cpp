@@ -66,19 +66,14 @@ DataDictionary::DataDictionary( const DataDictionary& copy )
 
 DataDictionary::~DataDictionary()
 {
-  FieldToGroup::iterator i;
-  for ( i = m_groups.begin(); i != m_groups.end(); ++i )
-  {
-    const FieldPresenceMap& presenceMap = i->second;
-
-    FieldPresenceMap::const_iterator iter = presenceMap.begin();
-    for ( ; iter != presenceMap.end(); ++iter )
-      delete iter->second.second;
-  }
 }
 
 DataDictionary& DataDictionary::operator=( const DataDictionary& rhs )
 {
+  // K-3: assigning to itself would replace each group with a copy of itself.
+  if ( this == &rhs )
+    return *this;
+
   m_hasVersion = rhs.m_hasVersion;
   m_checkFieldsOutOfOrder = rhs.m_checkFieldsOutOfOrder;
   m_checkFieldsHaveValues = rhs.m_checkFieldsHaveValues;
@@ -106,6 +101,8 @@ DataDictionary& DataDictionary::operator=( const DataDictionary& rhs )
   m_trailerOrder = rhs.m_trailerOrder;
   m_messageOrderedFields = rhs.m_messageOrderedFields;
 
+  // K-3: the groups held so far go (and are freed); only the right side's are copied in.
+  m_groups.clear();
   FieldToGroup::const_iterator i = rhs.m_groups.begin();
   for ( ; i != rhs.m_groups.end(); ++i )
   {

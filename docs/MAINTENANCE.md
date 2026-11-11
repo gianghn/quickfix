@@ -18,8 +18,8 @@ is [V1_PLAN.md](V1_PLAN.md); the fix ledger is [`KRX_FORK_NOTES.md`](../KRX_FORK
 5. **No blocking under `Session::m_mutex`** without a timeout.
 6. **Every change is a material change** for HOSE (V1 plan, 12.6): ledger line, two approvers,
    re-certification assessment.
-7. **No suppressions.** Fix the code; `ubsan_vptr.supp` (P2-5) is the only allowed suppression
-   file.
+7. **No suppressions** of any kind, sanitizer suppression files included (house policy). Fix the
+   code.
 
 ## 2. How a change lands
 
@@ -150,7 +150,7 @@ modernise upstream lines you are not fixing.
 
 | Check | Gate |
 |---|---|
-| ASan+UBSan | unit, acceptance, threaded acceptance and corpus replay green; vptr suppression only |
+| ASan+UBSan | `ut`, `krx_ut`, acceptance and threaded acceptance green, no suppressions; LeakSanitizer on Linux |
 | TSan | unit and threaded acceptance green with no unsuppressed report; 1 h stress × 10 seeds before a release |
 | LSan | unit suite leak-free |
 | Warnings | `-Wall -Wextra -Werror` on GCC and clang |

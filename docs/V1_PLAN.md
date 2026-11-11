@@ -48,7 +48,7 @@ The owner may change any of these before its phase starts.
 |---|---|
 | D1 | Base is `krx/main` @ `25273cc3`. No rebase onto upstream master during V1 (Trap-1, Trap-2). Upstream fixes come in as single cherry-picks, each listed in `KRX_FORK_NOTES.md`. |
 | D2 | Library behaviour is specified with Catch2 v3 `SCENARIO`/`GIVEN`/`WHEN`/`THEN` (already vendored as `src/C++/test/catch_amalgamated.*`) in `src/C++/test/krx/`; no new test dependency. Gateway behaviour stays in Gherkin in `krx_gateway_rust/tests/features/`. |
-| D3 | The research harness (stress, fuzz, repro A–D, summarizers, `ubsan_vptr.supp`, crash input) is imported into `test/krx/` in Phase 1 and becomes the fork's own. |
+| D3 | The research harness (stress, fuzz, repro A–D, summarizers, crash input) is imported into `test/krx/` in Phase 1 and becomes the fork's own. |
 | D4 | Mutation testing uses Mull (LLVM, clang build) on the critical functions listed in `MAINTENANCE.md`; quickfix-rs uses `cargo-mutants`. Gate: mutation score ≥ 80 % on each changed critical function; every survivor is killed by a new test or recorded as equivalent. |
 | D5 | Every fix is TDD: a test that fails on `25273cc3` (red count recorded), then the fix, then green in Release, ASan+UBSan and TSan. |
 | D6 | One phase, one branch, one PR, stacked: `agent/v1-p<k>` on top of the previous phase; merged in order into `krx/main`. |
@@ -86,13 +86,13 @@ The owner may change any of these before its phase starts.
 
 | Phase | What | Items | From | Status |
 |---|---|---|---|---|
-| 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups | not started |
+| 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | in progress |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | not started |
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | not started |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | not started |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
-| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2, P2-5, P2-6 | not started |
+| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
@@ -113,11 +113,14 @@ and 10. Phase 12 needs 8. Phases 13 and 14 run alongside 11–12 and finish last
 Nothing else can be TDD'd until this exists.
 
 - 1.0 Put the fork under the house C++ policy in fork mode (Local_Claude_Setup C-D15): `.cpp-policy-fork` with `base=` upstream `94625580`, `set(HOUSE_FORK ON)` and `include(HouseFlags.cmake)` in the top `CMakeLists.txt`, upstream library targets marked `SYSTEM`, every new target through `house_target()`; `lint.sh .` passes.
-- 1.1 Import the research harness into `test/krx/`: `stress.cpp`, `run_stress.sh`, `bench.cpp`, `audit-repro/repro.cpp` (A–D), `repro_datalen_overread.cpp`, `fuzz_message.cpp`, `fuzz_driver.cpp`, `make_corpus.py`, `summarize_{tsan,ubsan,lsan}.py`, `ubsan_vptr.supp`; wire them into CMake behind `-DQUICKFIX_KRX_TESTS=ON`.
+- 1.1 Import the research harness into `test/krx/`: `stress.cpp`, `run_stress.sh`, `bench.cpp`, `audit-repro/repro.cpp` (A–D), `repro_datalen_overread.cpp`, `fuzz_message.cpp`, `fuzz_driver.cpp`, `make_corpus.py`, `summarize_{tsan,ubsan,lsan}.py`; wire them into CMake behind `-DQUICKFIX_KRX_TESTS=ON`.
 - 1.2 Our own scenario target `krx_ut` (`src/C++/test/krx/`, Catch2 built as third-party code, `house_target`), with the `SessionPair` fixture: an acceptor `Session` behind a real `ThreadedSocketConnection` on a socketpair, driven by bytes, reused by Phases 2–6.
 - 1.3 `FixInput`: the fuzz modes as a library, and fuzz seeds made from the acceptance `.def` files at test time; `krx_ut` replays every seed (no libFuzzer needed). The fuzzer's crash input for P0-1 lands with its fix in Phase 2 (row 2.4): replaying it today crashes the parser.
-- 1.4 Fix the test bugs that stop sanitizer runs: `UtilityTestCase.cpp:224` detach-after-join, leaks at `FileStoreTestCase.cpp:200` and `UtilityTestCase.cpp:72` (P2-6).
-- 1.5 `krx_ci.yml`: add ASan+UBSan and TSan jobs (Linux, clang) running unit, acceptance and threaded acceptance (`runat_threaded.sh`); `ubsan_vptr.supp` is the only suppression (P2-5).
+- 1.4 Fix the test bugs that stop sanitizer runs: `UtilityTestCase.cpp:224` detach-after-join, the thread `spawnThread_True` never joins, leaks at `FileStoreTestCase.cpp:200` and `UtilityTestCase.cpp:72` (P2-6).
+- 1.4a K-3 (found reading LSan's stacks in Phase 1): `DataDictionary::operator=` keeps the groups it held that the right side doesn't have (a dictionary assigned over another validates with stale groups), leaks the ones it replaces, and has no self-assignment check (`DataDictionary.cpp:80-121`). Test-first in `krx_ut`; the groups are owned by `unique_ptr`, cleared before the copy (as upstream #764 does for `FieldMap`).
+- 1.4c The unit suite's remaining LeakSanitizer report on Linux (~2.7 MB): 128 direct leaks are UBSan's own report printer (gone with 1.4b); the rest are indirect only (a reference cycle) under the initiator session fixtures. Root-cause after 1.4b, then fix test-first.
+- 1.4b P2-5 (owner, 11 Nov 2026: port now, the house policy allows no suppression file): replace the `FIELD_GET_REF`/`FIELD_GET_PTR`/`getField<T>()` downcasts with the safe `getField(T&)`, as upstream #735 does (hand port; `FieldMap.h`, `Session.cpp`, `Message.cpp`, `MessageCracker.h`, `DataDictionary.cpp`, `Acceptor.cpp`). UBSan's vptr check is then clean in `ut` and `krx_ut`.
+- 1.5 `krx_ci.yml`: add ASan+UBSan (with LeakSanitizer) and TSan jobs (Linux) running `ut`, `krx_ut`, acceptance, and threaded acceptance under ASan (under TSan it waits for Phase 6, row 6.3); no suppressions.
 - 1.6 `krx_ci.yml`: `-Wall -Wextra -Werror` on GCC and clang for `src/C++` (fix or narrowly scope existing warnings; no blanket disables); clang-tidy (`bugprone-*`, `concurrency-*`, `cert-*`) and cppcheck jobs reporting new findings only.
 - 1.7 `krx_ci.yml`: a Mull job (clang with `mull-ir-frontend`) over the critical files of `MAINTENANCE.md`, reporting mutation score per function; a nightly 30-minute libFuzzer run per mode.
 - 1.8 Record the baseline: the red list (every Phase 2–8 row run against `25273cc3`), `bench` p50/p99/p99.9, and the current Mull score of each critical function, in `test/krx/BASELINE.md`.
