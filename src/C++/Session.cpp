@@ -402,6 +402,19 @@ void Session::nextResendRequest( const Message& resendRequest, const UtcTimeStam
        + IntConvertor::convert( beginSeqNo ) +
                    " TO: " + IntConvertor::convert( endSeqNo ) );
 
+  // KRX fork (P1-11): 1 <= BeginSeqNo <= EndSeqNo (0: to the end), checked before the store is read.
+  if ( beginSeqNo < 1 )
+  {
+    generateReject( resendRequest, SessionRejectReason_VALUE_IS_INCORRECT, FIELD::BeginSeqNo );
+    return;
+  }
+  // getValue(): FIX fields compare by tag number, not by value.
+  if ( endSeqNo != 0 && endSeqNo.getValue() < beginSeqNo.getValue() )
+  {
+    generateReject( resendRequest, SessionRejectReason_VALUE_IS_INCORRECT, FIELD::EndSeqNo );
+    return;
+  }
+
   std::string beginString = m_sessionID.getBeginString();
   if ( (beginString >= FIX::BeginString_FIX42 && endSeqNo == 0) ||
        (beginString <= FIX::BeginString_FIX42 && endSeqNo == 999999) ||
@@ -447,10 +460,21 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
     std::string strMsgType;
     const DataDictionary& sessionDD =
       m_dataDictionaryProvider.getSessionDataDictionary(m_sessionID.getBeginString());
+    // KRX fork (P2-4): a stored message without MsgType cannot be resent or even read in its
+    // stored field order; like any message not resent, it is gap-filled.
+    const std::string::size_type msgTypeTag = (*i).find("\00135=");
+    if (msgTypeTag == std::string::npos)
+    {
+      const std::string event = "Stored message " + IntConvertor::convert( current ) + " has no MsgType: gap-filled";
+      m_state.onEvent( event );
+      if ( !begin ) begin = current;
+      msgSeqNum = MsgSeqNum( current );
+      current = msgSeqNum + 1;
+      continue;
+    }
     if (sessionDD.isMessageFieldsOrderPreserved())
     {
-      std::string::size_type equalSign = (*i).find("\00135=");
-      equalSign += 4;
+      const std::string::size_type equalSign = msgTypeTag + 4;
       std::string::size_type soh = (*i).find_first_of('\001', equalSign);
       strMsgType = (*i).substr(equalSign, soh - equalSign);
     }

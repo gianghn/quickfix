@@ -31,11 +31,13 @@ constexpr const char* kFix44 = "FIX.4.4";
 // A session is an acceptor when built with HeartBtInt 0; the counterparty's Logon sets it.
 constexpr int kAcceptor = 0;
 
-FIX::DataDictionaryProvider Fix44Provider() {
+FIX::DataDictionaryProvider Fix44Provider(bool preserve_field_order) {
+  const auto dictionary = std::make_shared<FIX::DataDictionary>();
+  // Read after the flag: the dictionary keeps each message's field order only while reading.
+  dictionary->preserveMessageFieldsOrder(preserve_field_order);
+  dictionary->readFromURL(std::string(KRX_SPEC_DIR) + "/FIX44.xml");
   FIX::DataDictionaryProvider provider;
-  provider.addTransportDataDictionary(
-      FIX::BeginString(kFix44),
-      std::make_shared<FIX::DataDictionary>(std::string(KRX_SPEC_DIR) + "/FIX44.xml"));
+  provider.addTransportDataDictionary(FIX::BeginString(kFix44), dictionary);
   return provider;
 }
 
@@ -46,10 +48,17 @@ FIX::TimeRange AllDay() {
 
 }  // namespace
 
-SessionPair::SessionPair(const std::string& counterparty)
+SessionPair::SessionPair(const std::string& counterparty, const PairOptions& options)
     : id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
-      session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_, Fix44Provider(),
-               AllDay(), kAcceptor, &logs_) {
+      session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_,
+               Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_) {
+  // Before the reader thread starts, so the store needs no lock.
+  for (const auto& [seq_num, message] : options.stored_messages) {
+    store_.Store()->set(seq_num, message);
+    store_.Store()->setNextSenderMsgSeqNum(seq_num + 1);
+  }
+  // As every acceptor and initiator does: a write to a closed socket must not kill the process.
+  FIX::socket_init();
   const auto [ours, theirs] = FIX::socket_createpair();
   peer_ = theirs;
   connection_ = std::make_unique<FIX::ThreadedSocketConnection>(
@@ -152,6 +161,10 @@ std::string SessionPair::FromCounterparty(FIX::Message message, int seq_num) con
   header.setField(FIX::MsgSeqNum(seq_num));
   header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
   return message.toString();
+}
+
+void SessionPair::SendFromSession(FIX::Message message) const {
+  FIX::Session::sendToTarget(message, id_);
 }
 
 bool EventLog::Contains(std::string_view text) const {

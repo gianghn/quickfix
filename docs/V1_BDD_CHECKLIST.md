@@ -40,10 +40,10 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 2.9 | A garbled frame is never answered by re-delivering the previous message | 2.4 |
 | [x] 2.10 | Good messages queued behind a garbled frame are still delivered | 2.4 |
 | [x] 2.11 | A frame announcing a body larger than the cap disconnects the session with bounded memory | 2.5 |
-| [ ] 2.12 | A ResendRequest with a negative begin is rejected in under 1 ms without a store lookup | 2.6 |
-| [ ] 2.13 | A ResendRequest whose begin is after its end is rejected | 2.6 |
-| [ ] 2.14 | A ResendRequest with end 0 resends everything from begin | 2.6 |
-| [ ] 2.15 | A resend with field order preserved survives a stored message missing an expected field | 2.7 |
+| [x] 2.12 | A ResendRequest with a negative begin is rejected without a store lookup | 2.6 |
+| [x] 2.13 | A ResendRequest whose begin is after its end is rejected | 2.6 |
+| [x] 2.14 | A ResendRequest with end 0 resends everything from begin | 2.6 |
+| [x] 2.15 | A resend with field order preserved survives a stored message missing its MsgType (gap-filled) | 2.7 |
 
 ## 3. Socket liveness — Phase 3 (src/C++/test/krx/SocketLivenessScenarios.cpp)
 

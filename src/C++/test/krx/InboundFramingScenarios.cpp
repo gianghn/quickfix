@@ -4,6 +4,8 @@
 // Rows 2.5-2.7 (P0-2): an error while a message is handled ends that connection, never the process.
 // Rows 2.8-2.10 (P0-7): a garbled frame is skipped; the good frames around it are read, once each.
 // Row 2.11 (P1-13): the parser's buffer and BodyLength are capped; past either the connection ends.
+// Rows 2.12-2.14 (P1-11): a ResendRequest range is checked before the store is read.
+// Row 2.15 (P2-4): a stored message without MsgType does not break a field-order-preserving resend.
 #include <chrono>
 #include <cstddef>
 #include <fstream>
@@ -33,6 +35,38 @@ constexpr const char* kBadLengthFrame = "8=FIX.4.2\0019=A\00135=A\001108=30\0011
 constexpr const char* kNoLengthFrame = "8=FIX.4.2\00135=A\001108=30\00110=31\001";
 // A garbled frame for a FIX.4.4 session: BodyLength is not a number.
 constexpr const char* kGarbledFix44 = "8=FIX.4.4\0019=abc\00135=0\00134=99\00110=000\001";
+
+std::string ResendRequest(const krx::SessionPair& pair, int seq_num, int begin, int end) {
+  FIX::Message request;
+  request.getHeader().setField(FIX::MsgType("2"));  // ResendRequest
+  request.setField(FIX::BeginSeqNo(begin));
+  request.setField(FIX::EndSeqNo(end));
+  return pair.FromCounterparty(request, seq_num);
+}
+
+// The MsgTypes of the session's next frames, until one is `wanted` or `most` have come.
+std::vector<std::string> FramesUntil(krx::SessionPair& pair, const std::string& wanted, int most) {
+  std::vector<std::string> types;
+  for (int i = 0; i < most; ++i) {
+    types.push_back(krx::MsgTypeOf(pair.ReadFrame(kWait)));
+    if (types.back() == wanted || types.back().empty()) {
+      break;
+    }
+  }
+  return types;
+}
+
+// A message the session might have stored, well formed but without its MsgType.
+std::string StoredWithoutMsgType(const std::string& counterparty, int seq_num) {
+  FIX::Message stored;
+  FIX::Header& header = stored.getHeader();
+  header.setField(FIX::BeginString("FIX.4.4"));
+  header.setField(FIX::SenderCompID("KRXGW"));
+  header.setField(FIX::TargetCompID(counterparty));
+  header.setField(FIX::MsgSeqNum(seq_num));
+  header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+  return stored.toString();
+}
 
 // A FIX.4.4 Heartbeat whose body is exactly `length` bytes, padded with a Text field.
 std::string FrameWithBodyOf(std::size_t length) {
@@ -411,6 +445,113 @@ SCENARIO("A session sent an oversized BodyLength disconnects", "[krx][v1][securi
       THEN("the session closes the connection and logs why") {
         REQUIRE(pair.WaitClosed(kWait));
         REQUIRE(pair.Events().Contains("BodyLength"));
+      }
+    }
+  }
+}
+
+SCENARIO("A ResendRequest with a negative begin is rejected", "[krx][v1][security][p1-11]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXR212");
+    LogOn(pair);
+    WHEN("the counterparty asks for a resend from -1 to the end") {
+      pair.Write(ResendRequest(pair, 2, -1, 0));
+      THEN("the session answers with a Reject, not a resend or SequenceReset") {
+        const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "3"));
+      }
+    }
+  }
+}
+
+SCENARIO("A ResendRequest whose begin is after its end is rejected", "[krx][v1][security][p1-11]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXR213");
+    LogOn(pair);
+    WHEN("the counterparty asks for a resend from 5 to 3") {
+      pair.Write(ResendRequest(pair, 2, 5, 3));
+      THEN("the session answers with a Reject") {
+        const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "3"));
+      }
+    }
+  }
+}
+
+SCENARIO("A ResendRequest with end 0 resends everything from begin", "[krx][v1][security][p1-11]") {
+  GIVEN("a logged-on session that has sent one application message, number 2") {
+    krx::SessionPair pair("KRXR214");
+    LogOn(pair);
+    FIX::Message order_reject;
+    order_reject.getHeader().setField(FIX::MsgType("j"));  // BusinessMessageReject
+    order_reject.setField(FIX::RefMsgType("D"));
+    order_reject.setField(FIX::BusinessRejectReason(0));
+    pair.SendFromSession(order_reject);
+    const std::string sent = krx::MsgTypeOf(pair.ReadFrame(kWait));
+    REQUIRE((sent == "j"));
+    WHEN("the counterparty asks for a resend from 2 to 0") {
+      pair.Write(ResendRequest(pair, 2, 2, 0));
+      const std::string again = pair.ReadFrame(kWait);
+      THEN("message 2 comes again, marked as a possible duplicate") {
+        INFO(again);
+        REQUIRE((krx::MsgTypeOf(again) == "j" && again.contains("\00143=Y\001")));
+      }
+    }
+  }
+}
+
+SCENARIO("A ResendRequest for exactly message 1 is answered", "[krx][v1][security][p1-11]") {
+  GIVEN("a logged-on session whose message 1 was its Logon") {
+    krx::SessionPair pair("KRXR21E");
+    LogOn(pair);
+    WHEN("the counterparty asks for a resend from 1 to 1") {
+      pair.Write(ResendRequest(pair, 2, 1, 1));
+      THEN("the session gap-fills the Logon with a SequenceReset") {
+        const std::string answer = krx::MsgTypeOf(pair.ReadFrame(kWait));
+        INFO(answer);
+        REQUIRE((answer == "4"));
+      }
+    }
+  }
+}
+
+SCENARIO("A resend with field order preserved survives a stored message without MsgType",
+         "[krx][v1][security][p2-4]") {
+  GIVEN("a session preserving field order, its message 5 stored without a MsgType") {
+    krx::PairOptions options;
+    options.preserve_field_order = true;
+    options.stored_messages[5] = StoredWithoutMsgType("KRXP215", 5);
+    krx::SessionPair pair("KRXP215", options);
+    LogOn(pair);
+    WHEN("the counterparty asks for message 5 again, then sends a TestRequest") {
+      pair.Write(ResendRequest(pair, 2, 5, 5));
+      pair.Write(TestRequest(pair, 3));
+      THEN("the session gap-fills message 5 and answers the TestRequest") {
+        const std::vector<std::string> types = FramesUntil(pair, "0", 4);
+        INFO(types.size());
+        REQUIRE((types == std::vector<std::string>{"4", "0"}));
+        REQUIRE(pair.Events().Contains("has no MsgType"));
+      }
+    }
+  }
+}
+
+SCENARIO("Two stored messages without MsgType in a row are gap-filled together",
+         "[krx][v1][security][p2-4]") {
+  GIVEN("a session whose messages 5 and 6 are stored without a MsgType") {
+    krx::PairOptions options;
+    options.stored_messages[5] = StoredWithoutMsgType("KRXP2152", 5);
+    options.stored_messages[6] = StoredWithoutMsgType("KRXP2152", 6);
+    krx::SessionPair pair("KRXP2152", options);
+    LogOn(pair);
+    WHEN("the counterparty asks for messages 5 to 6 again") {
+      pair.Write(ResendRequest(pair, 2, 5, 6));
+      const std::string reset = pair.ReadFrame(kWait);
+      THEN("one SequenceReset moves it on to message 7") {
+        INFO(reset);
+        REQUIRE((krx::MsgTypeOf(reset) == "4" && reset.contains("\00136=7\001")));
       }
     }
   }
