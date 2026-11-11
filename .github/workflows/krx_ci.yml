@@ -36,3 +36,46 @@ jobs:
         run: ./runat.sh 6666
       - name: KRX scenarios (docs/V1_BDD_CHECKLIST.md)
         run: ctest --output-on-failure -R krx_ut
+
+  # Plan item 1.5: the same suites under the sanitizers, GCC on Linux, no suppressions. The first
+  # report fails the job. Threaded acceptance runs under ASan only: under TSan it is row 6.3.
+  sanitize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
+    env:
+      ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Let TSan map its shadow memory
+        if: matrix.sanitizer == 'thread'
+        # Ubuntu's default ASLR entropy leaves TSan no room ("unexpected memory mapping").
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Build
+        env:
+          SANITIZE: ${{ matrix.sanitizer == 'address' && 'address,undefined' || 'thread' }}
+        run: |
+          flags="-fsanitize=$SANITIZE -fno-sanitize-recover=all -fno-omit-frame-pointer"
+          cmake . -DCMAKE_BUILD_TYPE=Debug -DQUICKFIX_EXAMPLES=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$flags" "-DCMAKE_SHARED_LINKER_FLAGS=$flags"
+          cmake --build . --parallel 4
+      - name: Unit tests
+        working-directory: ./test
+        run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
+      - name: KRX scenarios
+        run: ctest --output-on-failure -R krx_ut
+      - name: Acceptance tests
+        working-directory: ./test
+        run: ./runat.sh 6666
+      - name: Threaded acceptance tests
+        if: matrix.sanitizer == 'address'
+        working-directory: ./test
+        run: ./runat_threaded.sh 6667

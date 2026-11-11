@@ -159,6 +159,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 |---|---|---|
 | [ ] U-1 | Mull score ≥ 80 % on every changed critical function; survivors killed or recorded as equivalent | 1.7, all fix phases |
 | [ ] U-2 | Baseline recorded: red list, bench p50/p99/p99.9, Mull scores | 1.8 |
+| [ ] U-15 | CI's sanitize job is green: ASan+UBSan+LSan and TSan over `ut`, `krx_ut`, acceptance (+ threaded under ASan) | 1.5 |
 | [ ] U-3 | `cpp-policy-check .` (house policy, fork mode) passes before every PR, its result in the PR | 1.6 |
 | [ ] U-4 | P0-10 root cause written down; 50+ seeded chaos runs end with LOST = 0 and every gap explained | 8.1–8.3 |
 | [ ] U-5 | TSan stress ≥ 1 h on each of 10 seeds: zero unsuppressed reports | 8.4 |
