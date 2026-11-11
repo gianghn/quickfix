@@ -34,6 +34,7 @@ Mutation scores come with the Mull job (plan item 1.7).
 | 1.4c | Seven `SessionTestCase` sections leaked the fixture's session | 537a9b25 | `ut` under LeakSanitizer | fork-only |
 | K-5 | `processQueuedMessages` failed on slow (sanitized) runs: real-time messages vs a fixed session clock | 12cedd84 | row 1.7 | fork-only (test-only) |
 | K-6 | Plain `SocketAcceptor` in `poll()` mode leaked its server and port; `SocketServer::close()` let the listening socket be closed up to three times | f86d9387 | row 1.8, acceptance (runs on this class) | related quickfix/quickfix#740 (open PR) |
+| P0-1 | A forged data length (`95=`, `RawDataLength` and the like) moved `Message::extractField` past the frame: heap overflow read, found again by our nightly fuzzer | this PR | rows 2.1–2.4, `test/krx/corpus/p0-1-forged-data-length.bin` | port of quickfix/quickfix#779 (open PR); we also reject a negative length |
 
 ### K-1. A threaded connection's socket was closed twice (10y)
 
