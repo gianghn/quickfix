@@ -188,8 +188,8 @@ void Session::next( const UtcTimeStamp& now )
 
 void Session::nextLogon( const Message& logon, const UtcTimeStamp& now )
 {
-  logon.getHeader().getField<SenderCompID>();
-  logon.getHeader().getField<TargetCompID>();
+  FIELD_THROW_IF_NOT_FOUND( logon.getHeader(), SenderCompID );
+  FIELD_THROW_IF_NOT_FOUND( logon.getHeader(), TargetCompID );
 
   if( m_refreshOnLogon )
     refresh();
@@ -678,7 +678,7 @@ bool Session::resend( Message& message )
 {
   Header& header = message.getHeader();
   auto const & sendingTime = header.getField<SendingTime>();
-  header.getField<MsgSeqNum>();
+  FIELD_THROW_IF_NOT_FOUND( header, MsgSeqNum );
   insertOrigSendingTime( header, sendingTime );
   header.setField( PossDupFlag( true ) );
   insertSendingTime( header );
@@ -1033,22 +1033,23 @@ void Session::populateRejectReason( Message& reject, const std::string& text )
 bool Session::verify( const Message& msg, bool checkTooHigh,
                       bool checkTooLow )
 {
-  const MsgType* pMsgType = 0;
-  const MsgSeqNum* pMsgSeqNum = 0;
+  // KRX fork (P2-5): copies, read safely; a failed read leaves through the catch below.
+  MsgType msgType;
+  MsgSeqNum msgSeqNum;
 
   try
   {
     const Header& header = msg.getHeader();
 
-    pMsgType = FIELD_GET_PTR( header, MsgType );
+    header.getField( msgType );
     const SenderCompID& senderCompID = FIELD_GET_REF( header, SenderCompID );
     const TargetCompID& targetCompID = FIELD_GET_REF( header, TargetCompID );
     const SendingTime& sendingTime = FIELD_GET_REF( header, SendingTime );
 
     if( checkTooHigh || checkTooLow )
-      pMsgSeqNum = FIELD_GET_PTR( header, MsgSeqNum );
+      header.getField( msgSeqNum );
 
-    if ( !validLogonState( *pMsgType ) )
+    if ( !validLogonState( msgType ) )
       throw std::logic_error( "Logon state is not valid for message" );
 
     if ( !isGoodTime( sendingTime ) )
@@ -1062,12 +1063,12 @@ bool Session::verify( const Message& msg, bool checkTooHigh,
       return false;
     }
 
-    if ( checkTooHigh && isTargetTooHigh( *pMsgSeqNum ) )
+    if ( checkTooHigh && isTargetTooHigh( msgSeqNum ) )
     {
       doTargetTooHigh( msg );
       return false;
     }
-    else if ( checkTooLow && isTargetTooLow( *pMsgSeqNum ) )
+    if ( checkTooLow && isTargetTooLow( msgSeqNum ) )
     {
       doTargetTooLow( msg );
       return false;
@@ -1077,7 +1078,7 @@ bool Session::verify( const Message& msg, bool checkTooHigh,
     {
       SessionState::ResendRange range = m_state.resendRange();
  
-      if ( *pMsgSeqNum >= range.second )
+      if ( msgSeqNum >= range.second )
       {
         m_state.onEvent ("ResendRequest for messages FROM: " +
                          IntConvertor::convert (range.first) + " TO: " +
@@ -1097,7 +1098,7 @@ bool Session::verify( const Message& msg, bool checkTooHigh,
   m_state.lastReceivedTime( m_timestamper() );
   m_state.testRequest( 0 );
 
-  fromCallback( pMsgType ? *pMsgType : MsgType(), msg, m_sessionID );
+  fromCallback( msgType, msg, m_sessionID );
   return true;
 }
 

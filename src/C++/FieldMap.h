@@ -164,12 +164,15 @@ public:
     return field;
   }
 
-  /// Get a field without type checking
+  /// Get a copy of a field as its type
+  // KRX fork (P2-5, upstream #735): casting the stored FieldBase to T was undefined behaviour.
   template<typename T>
-  const T& getField()
+  [[nodiscard]] T getField()
   const EXCEPT ( FieldNotFound )
   {
-    return *reinterpret_cast<const T*>(&getFieldRef( T::tag ));
+    T field;
+    getField( field );
+    return field;
   }
 
   /// Get a field without a field class
@@ -391,10 +394,10 @@ FIELD& get( FIELD& field ) const          \
 bool getIfSet( FIELD& field ) const       \
 { return (MAP).getFieldIfSet(field); }
 
-#define FIELD_GET_PTR( MAP, FLD ) \
-(const FIX::FLD*)MAP.getFieldPtr( FIX::FIELD::FLD )
+// KRX fork (P2-5): a copy, read safely; `const T& x = FIELD_GET_REF(...)` keeps it alive. The pointer
+// form had no safe equivalent and is gone.
 #define FIELD_GET_REF( MAP, FLD ) \
-(const FIX::FLD&)MAP.getFieldRef( FIX::FIELD::FLD )
+(MAP).getField<FIX::FLD>()
 #define FIELD_THROW_IF_NOT_FOUND( MAP, FLD ) \
 if( !(MAP).isSetField( FIX::FIELD::FLD) ) \
   throw FieldNotFound( FIX::FIELD::FLD )
