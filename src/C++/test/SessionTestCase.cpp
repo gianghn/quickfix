@@ -26,6 +26,7 @@
 
 #include <Session.h>
 #include <Responder.h>
+#include <memory>
 #include <Acceptor.h>
 #include <Values.h>
 #include <SessionID.h>
@@ -508,6 +509,14 @@ namespace
       object->setResponder( this );
     }
 
+    // Frees the fixture's session before a section builds its own: overwriting `object` leaked the
+    // first one (LeakSanitizer), and it still held the session ID in the registry.
+    void destroySession()
+    {
+      std::unique_ptr<Session> previous( object );
+      object = 0;
+    }
+
     Session* object;
     MemoryStoreFactory factory;
   };
@@ -590,6 +599,13 @@ namespace
       object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                             sessionTime, heartBtInt, 0 );
       object->setResponder( this );
+    }
+
+    // See sessionFixture::destroySession.
+    void destroySession()
+    {
+      std::unique_ptr<Session> previous( object );
+      object = 0;
     }
 
     Session* object;
@@ -1369,6 +1385,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
 
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
 
@@ -1407,6 +1424,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
     provider.addApplicationDataDictionary(ApplVerID("20"), pDataDictionary);
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
     object->setSenderDefaultApplVerID(ApplVerID("20"));
@@ -1481,6 +1499,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
     provider.addApplicationDataDictionary(ApplVerID("20"), pDataDictionary);
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
     object->setSenderDefaultApplVerID(ApplVerID("20"));
@@ -1537,6 +1556,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
     provider.addApplicationDataDictionary(ApplVerID("20"), pDataDictionary);
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
     object->setSenderDefaultApplVerID(ApplVerID("20"));
@@ -1633,6 +1653,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
     pDataDictionary->addMsgField(FIX::MsgType_Reject, 115);
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
 
@@ -1794,6 +1815,7 @@ TEST_CASE_METHOD(initiatorFixture, "InitiatorSessionTestCase")
     provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
     provider.addApplicationDataDictionary(ApplVerID("20"), pDataDictionary);
 
+    destroySession();
     object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                           sessionTime, 1, 0 );
     object->setSenderDefaultApplVerID(ApplVerID("20"));
@@ -2856,6 +2878,7 @@ TEST_CASE_METHOD(initiatorFIX40Fixture, "customFIX40_UnsupportedMessageType_ERRe
 
   provider.addTransportDataDictionary( sessionID.getBeginString(), pDataDictionary );
 
+  destroySession();
   object = new Session( [this](){ return now; }, *this, factory, sessionID, provider,
                         sessionTime, 1, 0 );
   object->setResponder( this );
