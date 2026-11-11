@@ -20,14 +20,14 @@ std::string Fix44() {
   return std::string(KRX_SPEC_DIR) + "/FIX44.xml";
 }
 
-// A FIX.4.4 News whose RawData is "abc" and whose RawDataLength says `data_length`.
-std::string NewsWithDataLength(int data_length) {
+// A FIX.4.4 News whose RawData is `data` and whose RawDataLength says `data_length`.
+std::string NewsWithDataLength(int data_length, const std::string& data = "abc") {
   FIX::Message news;
   news.getHeader().setField(FIX::BeginString("FIX.4.4"));
   news.getHeader().setField(FIX::MsgType("B"));  // News
   news.setField(FIX::Headline("forged"));
   news.setField(FIX::RawDataLength(data_length));
-  news.setField(FIX::RawData("abc"));
+  news.setField(FIX::RawData(data));
   return news.toString();
 }
 
@@ -85,6 +85,22 @@ SCENARIO("A correct data length still parses", "[krx][v1][security][p0-1]") {
         const std::string& data = parsed.getField(FIX::FIELD::RawData);
         INFO(data);
         REQUIRE((data == "abc"));
+      }
+    }
+  }
+}
+
+SCENARIO("An empty data field with length 0 still parses", "[krx][v1][security][p0-1]") {
+  GIVEN("a News whose RawDataLength is 0 and whose RawData is empty") {
+    const FIX::DataDictionary dictionary(Fix44());
+    const std::string wire = NewsWithDataLength(0, "");
+    WHEN("it is parsed") {
+      FIX::Message parsed;
+      parsed.setString(wire, false, &dictionary, &dictionary);
+      THEN("the data comes back empty") {
+        const std::string& data = parsed.getField(FIX::FIELD::RawData);
+        INFO(data);
+        REQUIRE(data.empty());
       }
     }
   }
