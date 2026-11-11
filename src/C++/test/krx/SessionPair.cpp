@@ -53,6 +53,9 @@ SessionPair::SessionPair(const std::string& counterparty, const PairOptions& opt
       session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_,
                Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_) {
   // Before the reader thread starts, so the store needs no lock.
+  if (options.send_timeout_ms > 0) {
+    session_.setSendTimeoutMs(options.send_timeout_ms);
+  }
   for (const auto& [seq_num, message] : options.stored_messages) {
     store_.Store()->set(seq_num, message);
     store_.Store()->setNextSenderMsgSeqNum(seq_num + 1);
@@ -127,6 +130,17 @@ bool SessionPair::WaitLoggedOn(std::chrono::milliseconds timeout) const {
   return true;
 }
 
+bool SessionPair::WaitForEvent(std::string_view text, std::chrono::milliseconds timeout) const {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!logs_.Events().Contains(text)) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(kPollStep);
+  }
+  return true;
+}
+
 bool SessionPair::WaitClosed(std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (true) {
@@ -167,6 +181,15 @@ bool EventLog::Contains(std::string_view text) const {
   const std::scoped_lock lock(mutex_);
   return std::ranges::any_of(events_,
                              [text](const std::string& event) { return event.contains(text); });
+}
+
+std::string EventLog::Dump() const {
+  const std::scoped_lock lock(mutex_);
+  std::string all;
+  for (const std::string& event : events_) {
+    all += event + "\n";
+  }
+  return all;
 }
 
 void EventLog::onEvent(const std::string& text) {

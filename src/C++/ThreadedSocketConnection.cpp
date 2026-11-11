@@ -22,7 +22,11 @@
 #else
 #include "config.h"
 #include <poll.h>
+#include <cerrno>
 #endif
+
+#include <chrono>
+#include <string>
 
 #include "ThreadedSocketConnection.h"
 #include "ThreadedSocketAcceptor.h"
@@ -74,8 +78,37 @@ ThreadedSocketConnection::~ThreadedSocketConnection()
   socket_close( m_socket );
 }
 
+#ifndef _MSC_VER
+namespace
+{
+// KRX fork (P0-3): false once `deadline` has passed; otherwise true when `s` takes more bytes or a
+// signal woke the wait, and the caller sends again (the send itself reports a real error).
+bool waitWritable( socket_handle s, std::chrono::steady_clock::time_point deadline )
+{
+  const int left = std::chrono::duration_cast<std::chrono::duration<int, std::milli>>(
+    deadline - std::chrono::steady_clock::now() ).count();
+  pollfd pfd{ s, POLLOUT, 0 };
+  return left > 0 && poll( &pfd, 1, left ) != 0;
+}
+}
+#endif
+
 bool ThreadedSocketConnection::send( const std::string& msg )
 {
+#ifndef _MSC_VER
+  // KRX fork (P0-3): never block for ever on a peer that stopped reading. The whole message must
+  // go out within the session's send timeout; past it the socket is shut down, which wakes the
+  // reading thread to disconnect the session, and the send fails. The socket is made
+  // non-blocking (macOS ignores MSG_DONTWAIT on a blocking one); the reading thread only calls
+  // recv after poll reports data, so it is not affected.
+  if( !m_nonBlocking )
+  {
+    socket_setnonblock( m_socket );
+    m_nonBlocking = true;
+  }
+  const int timeoutMs = m_pSession ? m_pSession->getSendTimeoutMs() : 15000;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( timeoutMs );
+#endif
   ssize_t totalSent = 0;
   while(totalSent < (int)msg.length())
   {
@@ -85,6 +118,16 @@ bool ThreadedSocketConnection::send( const std::string& msg )
 #ifndef _MSC_VER
     // A signal before any byte went out is not a failed send.
     if( sent < 0 && errno == EINTR ) continue;
+    // KRX fork (P0-3): a full buffer waits for room until the deadline (EAGAIN is EWOULDBLOCK on
+    // Linux and macOS).
+    if( sent < 0 && errno == EAGAIN )
+    {
+      if( waitWritable( m_socket, deadline ) ) continue;
+      const std::string event = "Send timed out after " + std::to_string( timeoutMs ) + " ms: disconnecting";
+      if( m_pSession ) m_pSession->getLog()->onEvent( event );
+      shutdown( m_socket, 2 );
+      return false;
+    }
 #endif
     if(sent < 0) return false;
     totalSent += sent;

@@ -49,7 +49,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 
 | # | Scenario | Plan |
 |---|---|---|
-| [ ] 3.1 | When the exchange stops reading, senders fail within the send timeout and the session disconnects | 3.1 |
+| [x] 3.1 | When the exchange stops reading, senders fail within the send timeout and the session disconnects | 3.1 |
 | [ ] 3.2 | When the exchange stops reading, `stop()` returns and no thread is left in send | 3.1, 3.3 |
 | [ ] 3.3 | Every session socket has keepalive and a user timeout of about two heartbeats | 3.2 |
 | [ ] 3.4 | `disconnect()` releases a sender stuck in send before it waits for the session lock | 3.3 |

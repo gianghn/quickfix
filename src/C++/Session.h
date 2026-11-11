@@ -160,6 +160,12 @@ public:
   void setLogonTimeout ( int value )
     { m_state.logonTimeout( value ); }
 
+  // KRX fork (P0-3, D11): how long one message may take to send before the connection is dropped:
+  // SendTimeout if set, otherwise half the heartbeat interval (15 s while that is still unknown).
+  int getSendTimeoutMs();
+  void setSendTimeoutMs ( int value )
+    { m_sendTimeoutMs = value; }
+
   int getLogoutTimeout()
     { return m_state.logoutTimeout(); }
   void setLogoutTimeout ( int value )
@@ -351,6 +357,7 @@ private:
   bool m_checkCompId;
   bool m_checkLatency;
   int m_maxLatency;
+  int m_sendTimeoutMs{ 0 };
   bool m_resetOnLogon;
   bool m_resetOnLogout;
   bool m_resetOnDisconnect;

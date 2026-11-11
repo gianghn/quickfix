@@ -78,6 +78,8 @@ private:
   Sessions m_sessions;
   Session* m_pSession;
   bool m_disconnect;
+  // KRX fork (P0-3): set on the first send, after any connect(), so a send can time out.
+  bool m_nonBlocking{ false };
 #if _MSC_VER
   fd_set m_fds;
 #endif

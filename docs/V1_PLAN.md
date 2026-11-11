@@ -56,6 +56,7 @@ The owner may change any of these before its phase starts.
 | D8 | Fixes that change public C++ behaviour keep the method signatures (quickfix-rs binds them); new behaviour is opt-in by setting only where the old behaviour is still safe. |
 | D9 | Thresholds marked *proposed* in the report (≤ 10 % p99.9 regression, 2× peak soak, 5 s alerts) are used until HOSE's member documents give the real numbers. |
 | D10 | The repo stays a public fork, so CI runs on GitHub-hosted runners (`ubuntu-latest`, `macos-latest`; sanitizer and Mull jobs on `ubuntu-latest` with clang). Runs longer than a job allows (24 CPU-h fuzzing, 8 h soak, 1 h TSan × 10 seeds) run in the lab and attach their logs to the phase handover. |
+| D11 | Send timeout (P0-3, owner 12 Nov 2026): one message may take `SendTimeout` seconds to send, default **half of HeartBtInt** (15 s at KRX's usual 30; 15 s while HeartBtInt is still unknown). Past it the send fails, the socket is shut down and the session disconnects. |
 
 ### Only the owner can decide
 
