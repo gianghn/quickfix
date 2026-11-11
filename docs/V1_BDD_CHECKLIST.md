@@ -22,7 +22,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 1.4 | Assigning one data dictionary over another frees what it held | 1.4a |
 | [x] 1.5 | Reading a field from a message never treats it as a type it is not | 1.4b |
 | [x] 1.6 | A typed message's header is never treated as a type it is not | 1.4d |
-| [ ] 1.7 | A new gap after a long queue drains is requested again | 1.4e |
+| [x] 1.7 | A new gap after a long queue drains is requested again (also on a slow, sanitized run) | 1.4e |
 
 ## 2. Hostile input — Phase 2 (src/C++/test/krx/InboundFramingScenarios.cpp)
 
