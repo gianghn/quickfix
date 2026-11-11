@@ -36,6 +36,11 @@ namespace FIX
 class Parser
 {
 public:
+  // KRX fork (P1-13): the largest BodyLength read, and the most the buffer may hold: that frame's
+  // header and trailer and the next socket read on top. Past either, the connection is closed.
+  static constexpr int MAX_BODY_LENGTH = 1024 * 1024;
+  static constexpr std::size_t MAX_BUFFER_SIZE = MAX_BODY_LENGTH + ( 64 * 1024 );
+
   Parser() {}
   ~Parser() {}
 
