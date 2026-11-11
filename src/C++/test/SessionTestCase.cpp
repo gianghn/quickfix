@@ -2457,6 +2457,10 @@ TEST_CASE_METHOD(acceptorFixture, "AcceptorSessionTestCase")
   SECTION("processQueuedMessages")
   {
     object->setResponder( this );
+    // The messages carry the real time and the session a fixed one: on a slow (sanitizer) run the
+    // last one fell outside MaxLatency and was rejected instead of starting a resend. This section
+    // is about the queue, not latency.
+    object->setCheckLatency( false );
     object->next( createLogon( "ISLD", "TW", 1 ), now );
     CHECK( 0 == disconnected );
 
