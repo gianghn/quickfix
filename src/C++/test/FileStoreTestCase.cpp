@@ -199,5 +199,6 @@ TEST_CASE_METHOD(resetBeforeAndAfterWithTestFileManager, "FileStoreTests_6")
 
     MessageStore* fileStore = fileStoreFactory.create(UtcTimeStamp::now(), sessionID);
     CHECK(fileStore != nullptr);
+    fileStoreFactory.destroy( fileStore );
   }
 }

@@ -25,6 +25,7 @@
 #endif
 
 #include <Utility.h>
+#include <memory>
 
 #include "catch_amalgamated.hpp"
 
@@ -69,7 +70,9 @@ TEST_CASE("UtilityTests")
 
   SECTION("stringConcat_ConcatsStrings")
   {
-    std::string actual = string_concat("ABC", "123", "!@#", 0);
+    // string_concat hands over a new[] buffer (upstream 7deb8275)
+    const std::unique_ptr<char[]> concatenated( string_concat("ABC", "123", "!@#", 0) );
+    std::string actual = concatenated.get();
     std::string expected = "ABC123!@#";
     CHECK(expected == actual);
   }
@@ -213,15 +216,21 @@ TEST_CASE("UtilityTests")
   SECTION("spawnThread_True")
   {
     std::string test = "test";
-    CHECK(thread_spawn(&startTestThread, &test));
+    // With its id kept, so the thread is joined rather than leaked at exit (TSan reports that).
+    thread_id thread {};
+    CHECK(thread_spawn(&startTestThread, &test, thread));
+    thread_join( thread );
   }
 
   SECTION("threadJoinAndDetach_NoException")
   {
-    thread_id threadId;
-    CHECK_NOTHROW(thread_spawn(&startTestThread, NULL, threadId));
-    CHECK_NOTHROW(thread_join(threadId));
-    CHECK_NOTHROW(thread_detach(threadId));
+    // Two threads: detaching one that was already joined is undefined (it aborts under TSan).
+    thread_id joined {};
+    thread_id detached {};
+    CHECK_NOTHROW(thread_spawn(&startTestThread, NULL, joined));
+    CHECK_NOTHROW(thread_spawn(&startTestThread, NULL, detached));
+    CHECK_NOTHROW(thread_join(joined));
+    CHECK_NOTHROW(thread_detach(detached));
   }
 
   SECTION("fileExists_FileDoesNotExist")

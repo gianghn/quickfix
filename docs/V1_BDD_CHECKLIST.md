@@ -19,6 +19,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 1.1 | A session can be driven byte by byte over a socketpair without a network | 1.2 |
 | [x] 1.2 | Every acceptance-test message replays through the parser and the dictionaries | 1.3 |
 | [ ] 1.3 | The whole unit suite runs to the end under TSan and LSan | 1.4 |
+| [ ] 1.4 | Assigning one data dictionary over another frees what it held | 1.4a |
+| [ ] 1.5 | Reading a field from a message never treats it as a type it is not | 1.4b |
 
 ## 2. Hostile input — Phase 2 (src/C++/test/krx/InboundFramingScenarios.cpp)
 
