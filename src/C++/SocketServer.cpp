@@ -136,12 +136,12 @@ socket_handle SocketServer::accept(socket_handle socket )
 
 void SocketServer::close()
 {
+  // KRX fork (K-6): the monitor closes each listening socket once and forgets it, so a second
+  // close() and ~SocketMonitor don't close a number that may belong to another file by then.
   for( const SocketToInfo::value_type& socketWithInfo : m_socketToInfo )
-  {
-    socket_handle socket = socketWithInfo.first;
-    socket_close( socket );
-    socket_invalidate( socket );
-  }
+    m_monitor.drop( socketWithInfo.first );
+  m_socketToInfo.clear();
+  m_portToInfo.clear();
 }
 
 bool SocketServer::block( Strategy& strategy, bool poll, double timeout )

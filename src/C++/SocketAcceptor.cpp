@@ -34,15 +34,13 @@ namespace FIX
 SocketAcceptor::SocketAcceptor( Application& application,
                                 MessageStoreFactory& factory,
                                 const SessionSettings& settings ) EXCEPT ( ConfigError )
-: Acceptor( application, factory, settings ),
-  m_pServer( 0 ) {}
+: Acceptor( application, factory, settings ) {}
 
 SocketAcceptor::SocketAcceptor( Application& application,
                                 MessageStoreFactory& factory,
                                 const SessionSettings& settings,
                                 LogFactory& logFactory ) EXCEPT ( ConfigError )
-: Acceptor( application, factory, settings, logFactory ),
-  m_pServer( 0 ) 
+: Acceptor( application, factory, settings, logFactory )
 {
 }
 
@@ -74,7 +72,7 @@ EXCEPT ( RuntimeError )
 
   try
   {
-    m_pServer = new SocketServer( 1 );
+    m_pServer = std::make_unique<SocketServer>( 1 );
 
     for( const SessionID& sessionID : sessionSettings.getSessions() )
     {
@@ -100,8 +98,7 @@ EXCEPT ( RuntimeError )
   }
   catch( SocketException& e )
   {
-    delete m_pServer;
-    m_pServer = 0;
+    m_pServer.reset();
     throw RuntimeError( "Unable to create, bind, or listen to port "
                        + IntConvertor::convert( (unsigned short)port ) + " (" + e.what() + ")" );
   }
@@ -126,8 +123,7 @@ void SocketAcceptor::onStart()
   }
 
   m_pServer->close();
-  delete m_pServer;
-  m_pServer = 0;
+  m_pServer.reset();
 }
 
 bool SocketAcceptor::onPoll()

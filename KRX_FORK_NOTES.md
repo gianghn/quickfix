@@ -55,10 +55,10 @@ first and re-running the checks.
 
 ## Known and not fixed here
 
-- **Plain `SocketAcceptor` closes its listening socket up to three times** (`onStop`, then
-  `onStart`'s end, then `~SocketMonitor`), and `onStop` can use `m_pServer` after the
-  acceptor's thread deleted it. The gateway doesn't run this class (see above). Related
-  upstream: quickfix/quickfix#740 (open).
+- **Plain `SocketAcceptor`: `onStop` can use `m_pServer` after the acceptor's thread released
+  it** (a stop from another thread racing the end of `onStart`). The triple close of its
+  listening socket and the server leaked in `poll()` mode are fixed (K-6, docs/V1_PLAN.md 1.4f).
+  The gateway doesn't run this class (see above). Related upstream: quickfix/quickfix#740 (open).
 - **`HttpServer` closes each accepted socket two or three times** (quickfix/quickfix#747, PRs
   #748, #750, #763, #766, none merged). It only runs when a config sets `HttpAcceptPort`; no
   gateway config does (checked 2026-11-09).
