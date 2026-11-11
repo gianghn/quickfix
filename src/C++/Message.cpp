@@ -648,7 +648,13 @@ FIX::FieldBase Message::extractField( const std::string& string, std::string::si
     try
     {
       const FieldBase& fieldLength = location->reverse_find( lenField );
-      soh = valueStart + IntConvertor::convert( fieldLength.getString() );
+      const int dataLength = IntConvertor::convert( fieldLength.getString() );
+      // The length comes from the wire: it must end inside the frame, on a SOH (upstream #779, P0-1).
+      if ( dataLength < 0 || dataLength >= std::distance( valueStart, strEnd ) )
+        throw InvalidMessage( std::string( "Data length field " ) + IntConvertor::convert( lenField ) + std::string( " is out of range for data field " ) + IntConvertor::convert( field ) );
+      soh = valueStart + dataLength;
+      if ( *soh != '\001' )
+        throw InvalidMessage( std::string( "SOH not found at the end of data field " ) + IntConvertor::convert( field ) );
     }
     catch( FieldNotFound& )
     {

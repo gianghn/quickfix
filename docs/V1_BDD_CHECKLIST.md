@@ -29,10 +29,10 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 
 | # | Scenario | Plan |
 |---|---|---|
-| [ ] 2.1 | A frame whose data length points past the end of the buffer is rejected as invalid, and the process keeps running | 2.1 |
-| [ ] 2.2 | A negative data length is rejected as invalid | 2.1 |
-| [ ] 2.3 | A data length of two billion is rejected as invalid | 2.1 |
-| [ ] 2.4 | The fuzzer's recorded crash input no longer crashes the parser | 2.1 |
+| [x] 2.1 | A frame whose data length points past the end of the buffer is rejected as invalid, and the process keeps running | 2.1 |
+| [x] 2.2 | A negative data length is rejected as invalid | 2.1 |
+| [x] 2.3 | A data length of two billion is rejected as invalid | 2.1 |
+| [x] 2.4 | The fuzzer's recorded crash input no longer crashes the parser | 2.1 |
 | [ ] 2.5 | A SequenceReset that arrives before Logon ends the connection, and the process keeps running | 2.2 |
 | [ ] 2.6 | An unexpected error raised in the gateway's `fromApp` disconnects the session and is logged, and the process keeps running | 2.3 |
 | [ ] 2.7 | An unexpected error in a connection thread is logged and disconnects only that session | 2.3 |
