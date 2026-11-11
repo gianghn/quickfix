@@ -81,6 +81,8 @@ const char ALLOW_UNKNOWN_MSG_FIELDS[] = "AllowUnknownMsgFields";
 const char PRESERVE_MESSAGE_FIELDS_ORDER[] = "PreserveMessageFieldsOrder";
 const char LOGON_TIMEOUT[] = "LogonTimeout";
 const char LOGOUT_TIMEOUT[] = "LogoutTimeout";
+// KRX fork (P0-3): seconds one message may take to send; default half of HeartBtInt.
+constexpr const char* SEND_TIMEOUT = "SendTimeout";
 const char FILE_STORE_PATH[] = "FileStorePath";
 const char MYSQL_STORE_USECONNECTIONPOOL[] = "MySQLStoreUseConnectionPool";
 const char MYSQL_STORE_DATABASE[] = "MySQLStoreDatabase";

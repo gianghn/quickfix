@@ -27,6 +27,8 @@ namespace krx {
 class EventLog : public FIX::Log {
  public:
   [[nodiscard]] bool Contains(std::string_view text) const;
+  // Every event so far, one per line, for a failing test to print.
+  [[nodiscard]] std::string Dump() const;
 
   void clear() override {}
 
@@ -116,6 +118,7 @@ class KeptStoreFactory : public FIX::MemoryStoreFactory {
 struct PairOptions {
   bool preserve_field_order{false};
   std::map<int, std::string> stored_messages;
+  int send_timeout_ms{0};  // 0: the session's default
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
@@ -148,6 +151,11 @@ class SessionPair {
   void ThrowFromApp() { application_.ThrowFromApp(); }
 
   void ThrowFromAdmin() { application_.ThrowFromAdmin(); }
+
+  [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
+
+  // True once the session logged an event containing `text`; false on timeout.
+  [[nodiscard]] bool WaitForEvent(std::string_view text, std::chrono::milliseconds timeout) const;
 
  private:
   LogonWatcher application_;

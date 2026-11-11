@@ -692,6 +692,19 @@ AppDataDictionary.FIX.4.4=FIX44.xml
         </tr>
 
         <tr align="left" valign="middle">
+          <td><b>SendTimeout</b></td>
+
+          <td>(KRX fork) Number of seconds one message may take to send.
+          When the counterparty stops reading and the message cannot go
+          out in time, the send fails and the session disconnects instead
+          of blocking.</td>
+
+          <td>positive integer</td>
+
+          <td>half of HeartBtInt (15 before HeartBtInt is known)</td>
+        </tr>
+
+        <tr align="left" valign="middle">
           <td><b>LogoutTimeout</b></td>
 
           <td>Number of seconds to wait for a logout response
