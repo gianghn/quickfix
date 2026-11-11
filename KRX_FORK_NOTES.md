@@ -1,9 +1,10 @@
 # KRX fork notes
 
-This fork (`gianghn/quickfix`, branch `krx/fd-double-close`) carries fixes the KRX gateway
+This fork (`gianghn/quickfix`, branch `krx/main`) carries fixes the KRX gateway
 (`enCapital/krx_gateway_rust`) needs and upstream `quickfix/quickfix` has not merged. It is
-based on upstream commit `94625580` (2024-07-24), the one quickfix-rs vendored. Keep this file
-up to date when a fix is added, sent upstream or merged there.
+based on upstream commit `94625580` (2024-07-24), the one quickfix-rs vendored. The release plan
+is [docs/V1_PLAN.md](docs/V1_PLAN.md); how changes land is [docs/MAINTENANCE.md](docs/MAINTENANCE.md).
+Add a ledger line with every change, and update it when a fix is sent upstream or merged there.
 
 ## Which classes the gateway runs
 
@@ -11,12 +12,30 @@ The gateway asks quickfix-rs for `FixSocketServerKind::SingleThreaded`. Our quic
 `is_single_threaded()` into the C++ flag `isMultiThreaded`, so that builds
 **`ThreadedSocketAcceptor` / `ThreadedSocketInitiator`**. Upstream quickfix-rs fixed the swap
 (arthurlm/quickfix-rs#36, 2026-10-04). Taking that fix would move the gateway to the plain
-`SocketAcceptor`, which has its own triple close (below), so don't take it without fixing that
-first and re-running the checks.
+`SocketAcceptor` (Trap-3 in the plan): K-6 fixed its triple close, the race below remains, so
+don't take it without fixing that and re-running the gateway's checks.
 
-## Fixes in this fork
+## Ledger
 
-### 1. A threaded connection's socket was closed twice (10y)
+Every fork change that touches engine or test code. Tests are `krx_ut` scenarios
+(`src/C++/test/krx/`, rows of [docs/V1_BDD_CHECKLIST.md](docs/V1_BDD_CHECKLIST.md)) unless named.
+Mutation scores come with the Mull job (plan item 1.7).
+
+| ID | Defect or change | Fix | Tests | Upstream |
+|---|---|---|---|---|
+| K-1 | A threaded connection's socket was closed twice (details below) | 5d85a415 | gateway `test_fd_double_close.rs`, `fix_connection_safety.feature` rule 1 | fork-only (no issue or PR, checked 2026-11-09) |
+| K-2 | A partial send put bytes from past the message on the wire (details below) | 0efe36b8 | gateway `test_partial_send.rs`, `fix_connection_safety.feature` rule 2 | quickfix/quickfix#742 (open) + our `EINTR` retry |
+| 1.0 | House C++ policy in fork mode; lines K-1/K-2 added meet it (`unique_ptr` instead of naked `delete`, const locker, no pointer arithmetic) | 4ac69d23 | `cpp-policy-check .`, unit 1,954, acceptance 468 | fork-only |
+| 1.2 | `FieldConvertors.h` digit check: explicit cast for the deliberate wrap (UBSan `implicit-conversion`) | e9c049cb | rows 1.1, 1.2 under ASan+UBSan | fork-only |
+| P2-6 | Upstream unit tests: detach after join, a leaked thread, two leaked objects | 17060e3d | row 1.3, `ut` under TSan | partly upstream 7deb8275 (test half ported) |
+| K-3 | `DataDictionary::operator=` kept stale groups, leaked replaced ones, no self-assignment check | 24124fc6 | row 1.4 | fork-only (same pattern as upstream #764 for `FieldMap`) |
+| P2-5 | `getField<T>()` / `FIELD_GET_REF` cast the stored `FieldBase` to its type (UB); `FIELD_GET_PTR` removed | 34f7d30f | row 1.5, `ut`/`krx_ut` under UBSan | quickfix/quickfix#735 (open), done differently: 2 definitions instead of every call site |
+| K-4 | Generated typed messages cast `FIX::Header` to the version's `Header` (UB); generator and 9 `Message.h` | b18d6c86 | row 1.6 | fork-only (no upstream issue found) |
+| 1.4c | Seven `SessionTestCase` sections leaked the fixture's session | 537a9b25 | `ut` under LeakSanitizer | fork-only |
+| K-5 | `processQueuedMessages` failed on slow (sanitized) runs: real-time messages vs a fixed session clock | 12cedd84 | row 1.7 | fork-only (test-only) |
+| K-6 | Plain `SocketAcceptor` in `poll()` mode leaked its server and port; `SocketServer::close()` let the listening socket be closed up to three times | f86d9387 | row 1.8, acceptance (runs on this class) | related quickfix/quickfix#740 (open PR) |
+
+### K-1. A threaded connection's socket was closed twice (10y)
 
 - **Symptom:** at shutdown the gateway aborted with `IO Safety violation: owned file descriptor
   already closed`, after its message log's sync got `EBADF`. Seen once in the dod's
@@ -35,12 +54,10 @@ first and re-running the checks.
   out of `m_threads`. `disconnect()` and `onStop` only shut it down. Listening sockets keep
   their single close in `onStop`. Threads that close after the stop began are joined by
   `onStop` (`m_closedThreads`).
-- **Checks:** `tests/test_fd_double_close.rs` and the first rule of
-  `tests/features/fix_connection_safety.feature`. Before: 7–22 files lost per 20–60 s (BDD: 5
-  in 3 rounds). After: 0 in 2 × 60 s. `KRX_RACE_SECONDS=60` makes the test run longer.
-- **Upstream:** no issue or PR (checked 2026-11-09); master still has it.
+- **Checks:** before: 7–22 files lost per 20–60 s (BDD: 5 in 3 rounds). After: 0 in 2 × 60 s.
+  `KRX_RACE_SECONDS=60` makes the gateway test run longer.
 
-### 2. A partial send put bytes from past the message on the wire (#742)
+### K-2. A partial send put bytes from past the message on the wire (#742)
 
 - **Symptom:** none seen in production yet. After a send came back part-way, the rest was sent
   with the whole message's length, so bytes past the end of the message (process memory) went
@@ -50,59 +67,36 @@ first and re-running the checks.
   bytes after the message.
 - **Fix (0efe36b8):** send `msg.length() - totalSent`, as #742 does; also retry a send that a
   signal interrupted before any byte went out (`EINTR`), which used to fail the message.
-- **Checks:** `tests/test_partial_send.rs` and the second rule of
-  `tests/features/fix_connection_safety.feature`.
 
 ## Known and not fixed here
 
 - **Plain `SocketAcceptor`: `onStop` can use `m_pServer` after the acceptor's thread released
-  it** (a stop from another thread racing the end of `onStart`). The triple close of its
-  listening socket and the server leaked in `poll()` mode are fixed (K-6, docs/V1_PLAN.md 1.4f).
-  The gateway doesn't run this class (see above). Related upstream: quickfix/quickfix#740 (open).
+  it** (a stop from another thread racing the end of `onStart`). The gateway doesn't run this
+  class (see above). Related upstream: quickfix/quickfix#740 (open PR).
 - **`HttpServer` closes each accepted socket two or three times** (quickfix/quickfix#747, PRs
   #748, #750, #763, #766, none merged). It only runs when a config sets `HttpAcceptPort`; no
   gateway config does (checked 2026-11-09).
+- Everything else known is in the plan: P0-1 … P0-11, P1-1 … P1-13 and the rest of P2.
 
-## Next work (for a separate agent, agreed with the owner 2026-11-09)
+## Other work outside this repo
 
-Both forks are in the gateway's build: this one (`gianghn/quickfix`, branch `krx/fd-double-close`)
-and `gianghn/quickfix-rs` (branch `thread-mod`), vendored at `vendor/quickfix-rs` in
-`enCapital/krx_gateway_rust`. Each fork has a `krx_ci.yml` workflow for its branch.
+- **quickfix-rs's `quickfix/tests/test_session.rs` is unreliable** (plan item 9.5). Both tests
+  register the same session IDs in QuickFIX's process-wide registry while running in parallel;
+  the logon wait `while !sender.is_logged_in() && !receiver.is_logged_in()` stops when either
+  side is logged on (`||` was meant); it relies on fixed 50 ms sleeps. Until it is fixed,
+  quickfix-rs's `krx_ci.yml` runs the tests one at a time. Run 2026-11-09 on macOS, three times
+  each (`cargo test -p quickfix --test test_session`):
 
-Checked so far on this branch: QuickFIX's unit tests (53 cases, 1,954 assertions) and acceptance
-tests (468) pass on macOS; the gateway's whole definition of done passes with both fixes.
+  | libquickfix | parallel (default) | one test at a time |
+  |---|---|---|
+  | upstream `94625580` | SIGSEGV 3 of 3 | pass 3 of 3 |
+  | this fork (K-1, K-2) | SIGSEGV 3 of 3 | pass 3 of 3 |
 
-1. **Make quickfix-rs's `quickfix/tests/test_session.rs` reliable.** It failed locally on this
-   branch: once a segfault after `test_session_set_next_sender_target_msg_seq_num` hung, once
-   `test_session_login_logout` at line 70. Its own faults: both tests register the same session
-   IDs in QuickFIX's process-wide registry while running in parallel; the logon wait
-   `while !sender.is_logged_in() && !receiver.is_logged_in()` stops when either side is logged
-   on (`||` was meant); it relies on fixed 50 ms sleeps. Whether it also fails on upstream
-   `94625580`: see the result recorded below. Fix the test, then find out whether a real defect
-   remains (it uses the same `ThreadedSocket*` classes as the gateway).
-2. **Get both forks' CI green** on Linux and macOS.
-3. **Fix the plain `SocketAcceptor` triple close** (above), test first, before quickfix-rs's
-   corrected server-kind mapping (arthurlm/quickfix-rs#36) is ever taken.
-4. **Offering the fixes upstream** (our double close; #742 plus the `EINTR` retry): the owner
-   decides first, since the PRs are public.
-
-Ways of working: tests before code (a red run recorded, then green), every vendor change approved
-by the owner, push only to the forks, and update this file with each change.
-
-### `test_session` on upstream `94625580` versus this branch
-
-Run 2026-11-09 on macOS, three times each (`cargo test -p quickfix --test test_session`):
-
-| libquickfix | parallel (default) | one test at a time |
-|---|---|---|
-| upstream `94625580` | SIGSEGV 3 of 3 | pass 3 of 3 |
-| this branch | SIGSEGV 3 of 3 | pass 3 of 3 |
-
-The crash predates our fixes: it comes from the two tests sharing the session registry. Until
-item 1 is done, quickfix-rs's `krx_ci.yml` runs the tests one at a time.
+- **Offering our fixes upstream** (K-1, K-2's `EINTR` retry, K-3, K-4, K-6): the owner decides
+  first, since the PRs are public (plan Q7).
 
 ## Updating from upstream
 
-Rebase this branch on the new upstream commit, re-run the gateway's checks above and its whole
-definition of done, then point the quickfix-rs submodule at the new commit. Drop a fix here
-once upstream has merged an equivalent.
+Take upstream fixes as single cherry-picks with their upstream tests, each with a ledger line.
+A rebase onto a newer upstream is its own release with full re-certification (see the traps in
+docs/MAINTENANCE.md §7). Drop a ledger line once upstream has merged an equivalent.

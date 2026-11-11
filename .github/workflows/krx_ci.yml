@@ -39,6 +39,45 @@ jobs:
       - name: KRX scenarios (docs/V1_BDD_CHECKLIST.md)
         run: ctest --output-on-failure -R krx_ut
 
+  # Rocky Linux 9 (no hosted runner: its container on Ubuntu). The engine, ut and at build with
+  # Rocky's own GCC 11, as a gateway build there would; krx_ut needs C++23 <format>, so it builds
+  # with gcc-toolset-13 in a second folder.
+  test-rocky9:
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - name: Install the toolchain
+        run: dnf install -y -q gcc-c++ cmake make ruby psmisc gcc-toolset-13-gcc-c++ git
+      - uses: actions/checkout@v4
+      - name: Build with GCC 11
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          cmake --build . --target ut ut_target at at_target --parallel 4
+      - name: Unit tests
+        working-directory: ./test
+        run: ./ut --quickfix-config-file cfg/ut.cfg --quickfix-spec-path ../spec
+      # Not runat.sh: inside a container its `at` outlives the script and holds the step open.
+      - name: Acceptance tests
+        working-directory: ./test
+        timeout-minutes: 30
+        run: |
+          ./setup.sh 6666
+          ./at -f cfg/at.cfg &
+          trap 'kill $!' EXIT
+          ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix4*/*.def definitions/server/fix50/*.def \
+            definitions/server/fix50sp1/*.def definitions/server/fix50sp2/*.def definitions/server/validate/*.def
+      - name: KRX scenarios (gcc-toolset-13)
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          cmake -S . -B build/krx -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -DQUICKFIX_EXAMPLES=OFF
+          cmake --build build/krx --target krx_ut --parallel 4
+          build/krx/src/C++/test/krx/krx_ut
+
   # Plan item 1.5: the same suites under the sanitizers, GCC on Linux, no suppressions. The first
   # report fails the job. Threaded acceptance runs under ASan only: under TSan it is row 6.3.
   sanitize:
