@@ -67,10 +67,6 @@ namespace FIX44
     Message(Message&& m) = default;
     Message& operator=(Message&&) = default;
     Message& operator=(const Message&) = default;
-    Header& getHeader() { return (Header&)m_header; }
-    const Header& getHeader() const { return (Header&)m_header; }
-    Trailer& getTrailer() { return (Trailer&)m_trailer; }
-    const Trailer& getTrailer() const { return (Trailer&)m_trailer; }
   };
 
 }

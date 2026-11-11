@@ -153,8 +153,7 @@ modernise upstream lines you are not fixing.
 | ASan+UBSan | `ut`, `krx_ut`, acceptance and threaded acceptance green, no suppressions; LeakSanitizer on Linux |
 | TSan | unit and threaded acceptance green with no unsuppressed report; 1 h stress × 10 seeds before a release |
 | LSan | unit suite leak-free |
-| Warnings | `-Wall -Wextra -Werror` on GCC and clang |
-| clang-tidy, cppcheck | no new finding on changed lines |
+| House C++ policy (fork mode) | `Local_Claude_Setup/scripts/cpp-policy-check .` passes before every PR, locally (the policy repo is private, this fork public); paste the stage table in the PR |
 | libFuzzer | nightly 30 min per mode; 24 CPU-h per mode before a release; every crash becomes a corpus file and a scenario |
 | Chaos stress | 50 seeded runs before a release, LOST = DUP = OOO = 0 |
 | Soak | ≥ 8 h Release before a release, flat RSS and fd counts |

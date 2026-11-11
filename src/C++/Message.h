@@ -72,6 +72,12 @@ public:
   bool hasGroup( unsigned num, const FIX::Group& group ) const
   { return FieldMap::hasGroup( num, group.field() ); }
 
+  // KRX fork (K-4): the typed accessors the generated FIX44::Header and its kind gave, so a typed
+  // message hands out this header itself instead of casting it to the version's Header type.
+  template <typename F> [[nodiscard]] bool isSet( const F& field ) const { return isSetField( field ); }
+  template <typename F> void set( const F& field ) { setField( field ); }
+  template <typename F> F& get( F& field ) const { getField( field ); return field; }
+  template <typename F> [[nodiscard]] bool getIfSet( F& field ) const { return getFieldIfSet( field ); }
 };
 
 class Trailer : public FieldMap
@@ -107,6 +113,11 @@ public:
   bool hasGroup( unsigned num, const FIX::Group& group ) const
   { return FieldMap::hasGroup( num, group.field() ); }
 
+  // KRX fork (K-4): see Header.
+  template <typename F> [[nodiscard]] bool isSet( const F& field ) const { return isSetField( field ); }
+  template <typename F> void set( const F& field ) { setField( field ); }
+  template <typename F> F& get( F& field ) const { getField( field ); return field; }
+  template <typename F> [[nodiscard]] bool getIfSet( F& field ) const { return getFieldIfSet( field ); }
 };
 
 /**

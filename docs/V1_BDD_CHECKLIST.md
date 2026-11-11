@@ -21,7 +21,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] 1.3 | The whole unit suite runs to the end under TSan and LSan | 1.4 |
 | [x] 1.4 | Assigning one data dictionary over another frees what it held | 1.4a |
 | [x] 1.5 | Reading a field from a message never treats it as a type it is not | 1.4b |
-| [ ] 1.6 | A typed message's header is never treated as a type it is not | 1.4d |
+| [x] 1.6 | A typed message's header is never treated as a type it is not | 1.4d |
+| [ ] 1.7 | A new gap after a long queue drains is requested again | 1.4e |
 
 ## 2. Hostile input — Phase 2 (src/C++/test/krx/InboundFramingScenarios.cpp)
 
@@ -158,7 +159,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 |---|---|---|
 | [ ] U-1 | Mull score ≥ 80 % on every changed critical function; survivors killed or recorded as equivalent | 1.7, all fix phases |
 | [ ] U-2 | Baseline recorded: red list, bench p50/p99/p99.9, Mull scores | 1.8 |
-| [ ] U-3 | `-Wall -Wextra -Werror` clean on GCC and clang; clang-tidy and cppcheck report no new findings | 1.6 |
+| [ ] U-3 | `cpp-policy-check .` (house policy, fork mode) passes before every PR, its result in the PR | 1.6 |
 | [ ] U-4 | P0-10 root cause written down; 50+ seeded chaos runs end with LOST = 0 and every gap explained | 8.1–8.3 |
 | [ ] U-5 | TSan stress ≥ 1 h on each of 10 seeds: zero unsuppressed reports | 8.4 |
 | [ ] U-6 | Echo-on chaos 20 runs with no hang; Release soak ≥ 8 h with LOST = DUP = OOO = 0 and flat RSS and fds | 8.5 |

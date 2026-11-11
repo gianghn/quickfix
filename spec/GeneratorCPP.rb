@@ -91,10 +91,8 @@ class GeneratorCPP
     @f.puts "Message(Message&& m) = default;"
     @f.puts "Message& operator=(Message&&) = default;"
     @f.puts "Message& operator=(const Message&) = default;"
-    @f.puts "Header& getHeader() { return (Header&)m_header; }"
-    @f.puts "const Header& getHeader() const { return (Header&)m_header; }"
-    @f.puts "Trailer& getTrailer() { return (Trailer&)m_trailer; }"
-    @f.puts "const Trailer& getTrailer() const { return (Trailer&)m_trailer; }"
+    # KRX fork (K-4): no getHeader()/getTrailer() here; casting FIX::Header to this Header was
+    # undefined behaviour. FIX::Header and FIX::Trailer have the typed set/get themselves.
     @f.dedent
     @f.puts "};"
     @f.puts
