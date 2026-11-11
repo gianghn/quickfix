@@ -86,8 +86,8 @@ The owner may change any of these before its phase starts.
 
 | Phase | What | Items | From | Status |
 |---|---|---|---|---|
-| 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | in progress |
-| 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | not started |
+| 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
+| 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | not started |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | not started |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
@@ -265,3 +265,26 @@ Non-code; each item has an owner and evidence filed with the go/no-go pack.
   green in Release, ASan+UBSan and TSan.
 
 ## Handover notes
+
+### Handover 2 — 12 Nov 2026
+
+**Built:** 2.1 P0-1 forged data length rejected (#19, port of upstream #779); 2.2–2.3 P0-2 an
+error while a message is handled disconnects that session, never the process (#20); 2.4 P0-7 a
+garbled frame is skipped, never re-delivered, and frames behind it are kept (#21); 2.5 P1-13
+BodyLength capped at 1 MiB, buffer at 1 MiB + 64 KiB (#22); 2.6 P1-11 ResendRequest range
+checked before the store is read, 2.7 P2-4 a stored message without MsgType is gap-filled (#23).
+**Red → green:** rows 2.1–2.15 in `src/C++/test/krx/InboundFramingScenarios.cpp`, plus 17
+edge-case rows; every fix row was red first (crash, abort, wrong answer or hang) and is green
+in CI on Ubuntu, macOS, Rocky 9, ASan+UBSan and TSan.
+**Checks:** `krx_ut` 41/41, `ut` 53/53, FIX.4.4 acceptance in CI; all versions 468/468 on
+#21 (framing change); `lint.sh` (fork mode) passes; Mull PR gate 100 % on every PR after its
+edge cases; the nightly fuzz ran 11 M inputs on the P0-1 fix without a crash.
+**Decisions taken:** 2.5 cap sizes (one constant each); 2.7 gap-fills an unreadable stored
+message, as FIX does for any message not resent; skipped garbled frames are not logged; 2.2–2.3
+catch `std::exception`, not `...` (a Rust panic is Q4).
+**Away from the spec:** row 2.12 dropped "in under 1 ms" (the order of the code guarantees no
+store lookup; a timing assertion over sockets would be flaky).
+**Left for the owner:** the plan uses P2-4 for two defects (2.7 and 4.5); TSan confirmed P1-1
+(Phase 6.3) the first time a test sent from another thread, which the gateway does for every
+order; a stored message with a bad checksum still stops a resend (Phase 4); the Mull artifact on
+calls taking a temporary string is in MAINTENANCE §5.
