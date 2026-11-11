@@ -163,6 +163,8 @@ public:
   // KRX fork (P0-3, D11): how long one message may take to send before the connection is dropped:
   // SendTimeout if set, otherwise half the heartbeat interval (15 s while that is still unknown).
   int getSendTimeoutMs();
+  // KRX fork (P0-3): the heartbeat interval in seconds; 0 while an acceptor awaits the Logon.
+  int getHeartBtInt();
   void setSendTimeoutMs ( int value )
     { m_sendTimeoutMs = value; }
 

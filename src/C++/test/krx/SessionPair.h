@@ -119,6 +119,7 @@ struct PairOptions {
   bool preserve_field_order{false};
   std::map<int, std::string> stored_messages;
   int send_timeout_ms{0};  // 0: the session's default
+  bool tcp{false};         // a loopback TCP pair instead of a socketpair (for TCP options)
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
@@ -153,6 +154,9 @@ class SessionPair {
   void ThrowFromAdmin() { application_.ThrowFromAdmin(); }
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
+
+  // The session's end of the connection.
+  [[nodiscard]] FIX::socket_handle SessionSocket() const { return connection_->getSocket(); }
 
   // True once the session logged an event containing `text`; false on timeout.
   [[nodiscard]] bool WaitForEvent(std::string_view text, std::chrono::milliseconds timeout) const;

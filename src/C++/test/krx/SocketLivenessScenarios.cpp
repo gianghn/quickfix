@@ -1,6 +1,8 @@
 // Phase 3 of docs/V1_BDD_CHECKLIST.md: a socket never freezes a session.
 // Row 3.1 (P0-3): when the counterparty stops reading, a send fails within the send timeout and the
 // session disconnects, instead of blocking the thread (and the session lock) for ever.
+// Row 3.3 (P0-3): every session socket has keepalive and, on Linux, a TCP user timeout of two
+// heartbeat intervals, so the kernel drops a peer that stops acknowledging.
 #include <chrono>
 #include <string>
 
@@ -56,6 +58,24 @@ void AskForMessage5(const krx::SessionPair& pair) {
   pair.Write(pair.FromCounterparty(request, 2));
 }
 
+// An integer socket option of `s`.
+int SocketOption(FIX::socket_handle s, int level, int name) {
+  int value = 0;
+  socklen_t size = sizeof(value);
+  getsockopt(s, level, name, &value, &size);
+  return value;
+}
+
+// How long unacknowledged data may stay before the kernel drops the connection: Linux's
+// TCP_USER_TIMEOUT, macOS's TCP_RXT_CONNDROPTIME (seconds).
+int DropAfterMs(FIX::socket_handle s) {
+#ifdef TCP_USER_TIMEOUT
+  return SocketOption(s, IPPROTO_TCP, TCP_USER_TIMEOUT);
+#else
+  return SocketOption(s, IPPROTO_TCP, TCP_RXT_CONNDROPTIME) * 1000;
+#endif
+}
+
 krx::PairOptions WithLargeMessage5(const std::string& counterparty, int send_timeout_ms) {
   krx::PairOptions options;
   options.stored_messages[5] = LargeStoredMessage(counterparty);
@@ -100,6 +120,36 @@ SCENARIO("A configured SendTimeout overrides the default", "[krx][v1][security][
       const int timeout = pair.SendTimeoutMs();
       INFO(timeout);
       REQUIRE((timeout == 300));
+    }
+  }
+}
+
+SCENARIO("A session's TCP socket has keepalive on", "[krx][v1][security][p0-3]") {
+  GIVEN("a session on a TCP connection") {
+    krx::PairOptions options;
+    options.tcp = true;
+    krx::SessionPair pair("KRXKA33", options);
+    WHEN("the counterparty logs on and the session answers") {
+      LogOn(pair, 8);
+      THEN("keepalive is on for the session's socket") {
+        REQUIRE((SocketOption(pair.SessionSocket(), SOL_SOCKET, SO_KEEPALIVE) != 0));
+      }
+    }
+  }
+}
+
+SCENARIO("A session's TCP user timeout is two heartbeat intervals", "[krx][v1][security][p0-3]") {
+  GIVEN("a session on a TCP connection") {
+    krx::PairOptions options;
+    options.tcp = true;
+    krx::SessionPair pair("KRXUT33", options);
+    WHEN("the counterparty logs on with HeartBtInt 8 and the session answers") {
+      LogOn(pair, 8);
+      THEN("unacknowledged data drops the connection after 16 seconds") {
+        const int timeout = DropAfterMs(pair.SessionSocket());
+        INFO(timeout);
+        REQUIRE((timeout == 16000));
+      }
     }
   }
 }

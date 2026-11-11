@@ -41,6 +41,16 @@ FIX::DataDictionaryProvider Fix44Provider(bool preserve_field_order) {
   return provider;
 }
 
+// A connected loopback TCP pair: the session's end first.
+std::pair<FIX::socket_handle, FIX::socket_handle> TcpPair() {
+  const FIX::socket_handle listener = FIX::socket_createAcceptor(0, true);
+  const FIX::socket_handle client = FIX::socket_createConnector();
+  FIX::socket_connect(client, "127.0.0.1", FIX::socket_hostport(listener));
+  const FIX::socket_handle server = FIX::socket_accept(listener);
+  FIX::socket_close(listener);
+  return {server, client};
+}
+
 // The same start and end: the session is open all day.
 FIX::TimeRange AllDay() {
   return {FIX::UtcTimeOnly(0, 0, 0), FIX::UtcTimeOnly(0, 0, 0)};
@@ -62,7 +72,7 @@ SessionPair::SessionPair(const std::string& counterparty, const PairOptions& opt
   }
   // As every acceptor and initiator does: a write to a closed socket must not kill the process.
   FIX::socket_init();
-  const auto [ours, theirs] = FIX::socket_createpair();
+  const auto [ours, theirs] = options.tcp ? TcpPair() : FIX::socket_createpair();
   peer_ = theirs;
   connection_ = std::make_unique<FIX::ThreadedSocketConnection>(
       ours, FIX::ThreadedSocketConnection::Sessions{id_}, nullptr);

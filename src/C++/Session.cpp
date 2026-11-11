@@ -594,8 +594,13 @@ Message Session::newMessage( const MsgType & msgType ) const
 int Session::getSendTimeoutMs()
 {
   if ( m_sendTimeoutMs > 0 ) return m_sendTimeoutMs;
-  const int heartBtInt = m_state.heartBtInt().getValue();
+  const int heartBtInt = getHeartBtInt();
   return heartBtInt > 0 ? heartBtInt * 500 : 15000;
+}
+
+int Session::getHeartBtInt()
+{
+  return m_state.heartBtInt().getValue();
 }
 
 bool Session::send( Message& message )

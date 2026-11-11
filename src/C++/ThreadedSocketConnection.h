@@ -78,8 +78,9 @@ private:
   Sessions m_sessions;
   Session* m_pSession;
   bool m_disconnect;
-  // KRX fork (P0-3): set on the first send, after any connect(), so a send can time out.
-  bool m_nonBlocking{ false };
+  // KRX fork (P0-3): the socket is set up on the first send, after any connect() and once the
+  // heartbeat interval is known: non-blocking (a send can time out), keepalive, user timeout.
+  bool m_socketConfigured{ false };
 #if _MSC_VER
   fd_set m_fds;
 #endif
