@@ -60,6 +60,9 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] 3.9 | The acceptor backs off and recovers when it runs out of file descriptors | 3.6 |
 | [ ] 3.10 | A peer trickling one byte every 500 ms is timed out per HeartBtInt | 3.7 |
 | [ ] 3.11 | When the primary exchange host is unreachable, the initiator reaches the backup host within 5 s | 3.7 |
+| [ ] 3.12 | Latency percentiles: p50, p99, p99.9 and max of known samples are exact; one sample is every percentile; no samples is reported as none | 3.8a |
+| [ ] 3.13 | A small resend benchmark (500 messages, one sender) reports every message resent, at least one order placed during the resend, and a time for each order | 3.8b |
+| [ ] 3.14 | A resend benchmark with no sender reports the resend alone and no orders, so runs with and without contention compare | 3.8b |
 
 ## 4. Store durability — Phase 4 (src/C++/test/krx/StoreDurabilityScenarios.cpp)
 

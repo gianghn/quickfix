@@ -102,6 +102,16 @@ The owner may change any of these before its phase starts.
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
 
+### Next steps (12 Nov 2026)
+
+1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6) and #33 (3.7, P1-10), each retargeted to `krx/main` and green first.
+2. 3.7 P1-12: non-blocking connect with a timeout, failover to the backup host within 5 s (row 3.11).
+3. Row 3.2: `stop()` returns while the exchange reads nothing, no thread left in send (no test yet).
+4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner.
+5. Phase 3 handover note; Progress row to done.
+6. Phase 6 (6.1, 6.2, 6.4–6.6; 6.3 is done) and Phase 8: no owner question blocks them.
+7. **Owner:** answer Q1 (Phase 4), Q2 and Q3 (Phase 5), Q5 and Q6 (Phase 7); tell us the gateway's cores and any CPU limit (3.8c); ask HOSE for the member FIX spec (Phases 10, 11, 14).
+
 ## Phases
 
 Independence: Phase 1 first. Phases 2, 3, 4 and 7 are independent of each other once Phase 1 is
@@ -149,6 +159,11 @@ Nothing else can be TDD'd until this exists.
 - 3.5 P1-3: retry `poll` and `recv` on `EINTR` in `ThreadedSocketConnection::read()` (`:113-154`).
 - 3.6 P1-4: the accept loop retries `EINTR`/`ECONNABORTED`, backs off on `EMFILE`, logs every failure (`ThreadedSocketAcceptor.cpp:210-244`).
 - 3.7 P1-10 and P1-12: call `next(now)` at most once a second on every read-loop pass; non-blocking connect with a timeout so `SocketConnectHost1` failover is fast (`ThreadedSocketConnection.cpp:129-142`, `ThreadedSocketInitiator.cpp:37-68`, `Utility.cpp:240-268`).
+- 3.8 Resend under contention, measured (added 12 Nov 2026, follows 3.4). 3.4 lets threads waiting for `m_mutex` in between resent messages: a wait loop with `std::this_thread::yield()`, capped at 10 ms. No test can see what the yield does, so Mull's mutant removing it survives; the owner accepted it as equivalent until this item measures it (MAINTENANCE §5). Tests first, as for engine code:
+  - 3.8a TDD: move the percentile code out of `Bench.cpp` into `LatencyStats.{h,cpp}` in `src/C++/test/krx/`; its rows (3.12) are written and red before the move.
+  - 3.8b BDD: `krx_bench resend`: one session resends N stored messages (default 20,000) to a counterparty that reads as fast as it can, while S sender threads (default 2) place orders. It reports the resend time, each sender's `send()` time (p50/p99/p99.9/max), the orders placed during the resend and the process CPU time. The run is a function the scenarios call with small numbers (rows 3.13, 3.14), so it is tested in `krx_ut`; the scenarios are red (the function does not exist) before it is written.
+  - 3.8c Measure three handoffs, each an engine build: yield (3.4 as merged), spin (b1a63c0c), a 1 ms sleep when a thread waits (a local patch, not committed). Linux Release in Docker with `--cpus=1`, `2` and `4` (a CPU quota, as in Kubernetes) and pinned to one core with `taskset`; three interleaved runs each, medians into `test/krx/BASELINE.md`.
+  - 3.8d Decide with the owner: yield measurably better than spin on 1–2 CPUs → a scenario pinned to one CPU that shows it (kills the mutant); no difference → the mutant stays recorded as equivalent; every variant poor at `--cpus=1` → replace the wait loop with a condition-variable handoff (waiters signal once they hold the lock, no spinning), with its own red test.
 
 ### Phase 4 — Store survives disk errors and crashes · **high** · `quickfix` · waits for Q1
 
