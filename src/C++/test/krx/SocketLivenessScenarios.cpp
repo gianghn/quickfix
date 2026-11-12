@@ -5,6 +5,8 @@
 // heartbeat intervals, so the kernel drops a peer that stops acknowledging.
 // Rows 3.2 and 3.4 (P0-3): disconnect() releases a sender stuck in send at once, before it waits
 // for the session lock that sender holds.
+// Row 3.5 (P0-3): a large resend lets a sender in between chunks, and stops when the session
+// disconnects.
 // Rows 3.6 and 3.7 (P1-3): a signal that interrupts the reading thread's poll is not a socket
 // error; the session stays logged on, idle or busy.
 #include <pthread.h>
@@ -41,29 +43,72 @@ void LogOn(krx::SessionPair& pair, int heart_bt_int = 30) {
   REQUIRE((answer == "A"));
 }
 
-// A BusinessMessageReject the session sent as its message 5, with a Text too large for the socket.
-std::string LargeStoredMessage(const std::string& counterparty) {
+// A BusinessMessageReject the session sent as message `seq_num`, with a Text of `text_size` bytes
+// (by default too large for the socket).
+std::string StoredMessage(const std::string& counterparty, int seq_num = 5,
+                          std::size_t text_size = kLargeText) {
   FIX::Message stored;
   FIX::Header& header = stored.getHeader();
   header.setField(FIX::BeginString("FIX.4.4"));
   header.setField(FIX::MsgType("j"));
   header.setField(FIX::SenderCompID("KRXGW"));
   header.setField(FIX::TargetCompID(counterparty));
-  header.setField(FIX::MsgSeqNum(5));
+  header.setField(FIX::MsgSeqNum(seq_num));
   header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
   stored.setField(FIX::RefMsgType("D"));
   stored.setField(FIX::BusinessRejectReason(0));
-  stored.setField(FIX::Text(std::string(kLargeText, 'x')));
+  stored.setField(FIX::Text(std::string(text_size, 'x')));
   return stored.toString();
+}
+
+// The counterparty asks for every message from `begin_seq_no` again.
+void AskForMessagesFrom(const krx::SessionPair& pair, int begin_seq_no) {
+  FIX::Message request;
+  request.getHeader().setField(FIX::MsgType("2"));  // ResendRequest
+  request.setField(FIX::BeginSeqNo(begin_seq_no));
+  request.setField(FIX::EndSeqNo(0));
+  pair.Write(pair.FromCounterparty(request, 2));
 }
 
 // The counterparty asks for message 5 again, so the session sends the large message.
 void AskForMessage5(const krx::SessionPair& pair) {
-  FIX::Message request;
-  request.getHeader().setField(FIX::MsgType("2"));  // ResendRequest
-  request.setField(FIX::BeginSeqNo(5));
-  request.setField(FIX::EndSeqNo(0));
-  pair.Write(pair.FromCounterparty(request, 2));
+  AskForMessagesFrom(pair, 5);
+}
+
+// A new order from the gateway: a BusinessMessageReject whose Text marks it.
+FIX::Message NewOrder() {
+  FIX::Message order;
+  order.getHeader().setField(FIX::MsgType("j"));
+  order.setField(FIX::RefMsgType("D"));
+  order.setField(FIX::BusinessRejectReason(0));
+  order.setField(FIX::Text("new-order"));
+  return order;
+}
+
+constexpr int kResent = 2000;  // messages 2..2001, about 2 MB: far more than a socket buffer holds
+
+krx::PairOptions WithManyStoredMessages(const std::string& counterparty) {
+  krx::PairOptions options;
+  for (int seq = 2; seq < kResent + 2; ++seq) {
+    options.stored_messages[seq] = StoredMessage(counterparty, seq, 1024);
+  }
+  return options;
+}
+
+// Reads what the session sends until the new order or the timeout, and counts the resent
+// (PossDupFlag) messages that came before it; -1 when the order never came.
+int ResentBeforeOrder(krx::SessionPair& pair) {
+  int resent = 0;
+  for (;;) {
+    const std::string frame = pair.ReadFrame(kWait);
+    if (frame.empty()) {
+      return -1;
+    }
+    if (frame.contains("\00158=new-order\001")) {
+      return resent;
+    }
+    resent += frame.contains("\00143=Y\001") ? 1 : 0;
+  }
 }
 
 // An integer socket option of `s`.
@@ -123,7 +168,7 @@ int Heartbeats(krx::SessionPair& pair, int count) {
 
 krx::PairOptions WithLargeMessage5(const std::string& counterparty, int send_timeout_ms) {
   krx::PairOptions options;
-  options.stored_messages[5] = LargeStoredMessage(counterparty);
+  options.stored_messages[5] = StoredMessage(counterparty);
   options.send_timeout_ms = send_timeout_ms;
   return options;
 }
@@ -260,6 +305,44 @@ SCENARIO("disconnect releases a sender stuck in send before it waits for the ses
              << " ms; events:\n"
              << pair.Events().Dump());
         REQUIRE((took < std::chrono::seconds(2) && !pair.Events().Contains("Send timed out")));
+      }
+    }
+  }
+}
+
+SCENARIO("A sender can place an order while a large resend is in progress",
+         "[krx][v1][security][p0-3]") {
+  GIVEN("a logged-on session resending 2000 messages to a counterparty that reads nothing yet") {
+    krx::SessionPair pair("KRXRS35", WithManyStoredMessages("KRXRS35"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WaitForEvent("Resending Message", kWait));
+    WHEN("a sender places an order and the counterparty starts reading") {
+      bool sent = false;
+      std::thread sender([&pair, &sent] { sent = pair.Send(NewOrder()); });
+      const int resent = ResentBeforeOrder(pair);
+      sender.join();
+      THEN("the order goes out before the resend has finished") {
+        INFO(resent << " resent messages came before the order; events:\n" << pair.Events().Dump());
+        REQUIRE((sent && resent >= 0 && resent < kResent));
+      }
+    }
+  }
+}
+
+SCENARIO("A disconnect during a large resend stops the resend", "[krx][v1][security][p0-3]") {
+  GIVEN("a logged-on session resending 2000 messages to a counterparty that reads nothing") {
+    krx::SessionPair pair("KRXRS35D", WithManyStoredMessages("KRXRS35D"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WaitForEvent("Resending Message", kWait));
+    WHEN("the gateway disconnects the session") {
+      pair.Disconnect();
+      pair.WaitReaderStopped();
+      const std::size_t resent = pair.Events().Count("Resending Message");
+      THEN("the session stops resending instead of running through the rest") {
+        INFO(resent << " messages resent");
+        REQUIRE((resent < static_cast<std::size_t>(kResent)));
       }
     }
   }

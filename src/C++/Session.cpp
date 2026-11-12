@@ -27,6 +27,7 @@
 #include "Values.h"
 #include <algorithm>
 #include <iostream>
+#include <thread>
 
 namespace FIX
 {
@@ -452,9 +453,21 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   int current = beginSeqNo;
   bool appMessageJustSent = false;
   std::string messageString;
+  const std::ptrdiff_t resendChunk = 100;
+  const Responder* const responder = m_pResponder;
 
   for ( i = messages.begin(); i != messages.end(); ++i )
   {
+    // KRX fork (P0-3): the caller holds m_mutex; release it every resendChunk messages so a sender
+    // can place an order during a long resend, and stop if the connection went away meanwhile.
+    if ( i != messages.begin() && ( i - messages.begin() ) % resendChunk == 0 )
+    {
+      {
+        const ReverseLocker unlocked( m_mutex );
+        std::this_thread::yield();
+      }
+      if ( m_pResponder != responder ) return;
+    }
     appMessageJustSent = false;
     std::unique_ptr<FIX::Message> pMsg;
     std::string strMsgType;

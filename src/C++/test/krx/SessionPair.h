@@ -27,6 +27,8 @@ namespace krx {
 class EventLog : public FIX::Log {
  public:
   [[nodiscard]] bool Contains(std::string_view text) const;
+  // How many events so far contain `text`.
+  [[nodiscard]] std::size_t Count(std::string_view text) const;
   // Every event so far, one per line, for a failing test to print.
   [[nodiscard]] std::string Dump() const;
 
@@ -155,8 +157,18 @@ class SessionPair {
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
 
+  // The gateway sends `message` (its MsgType set), from whichever thread calls this.
+  bool Send(FIX::Message message) { return session_.send(message); }
+
   // The gateway disconnects the session, as on stop() or a risk limit.
   void Disconnect() { session_.disconnect(); }
+
+  // Waits until the session's reading thread has stopped, after the connection closed.
+  void WaitReaderStopped() {
+    if (reader_.joinable()) {
+      reader_.join();
+    }
+  }
 
   // The thread reading for the session, for a test to aim signals at.
   [[nodiscard]] std::thread::native_handle_type ReaderThread() { return reader_.native_handle(); }
