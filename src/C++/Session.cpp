@@ -698,7 +698,11 @@ bool Session::sendRaw( Message& message, int num )
   }
   catch ( IOException& e )
   {
-    m_state.onEvent( e.what() );
+    // KRX fork (P0-4, D7): the store could not write, so the message was neither kept nor sent.
+    // The session fails closed: an error the gateway alerts on, then a disconnect.
+    const std::string event = std::string( "Store write failed, disconnecting: " ) + e.what();
+    m_state.onEvent( event );
+    disconnect();
     return false;
   }
 }

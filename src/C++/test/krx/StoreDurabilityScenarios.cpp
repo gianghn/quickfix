@@ -2,6 +2,9 @@
 // Rows 4.1 and 4.2 (P0-4): a write that fails (here: the file may not grow, as on a full disk)
 // leaves the store as it was before the write: earlier messages still read back, the failed one is
 // not there, and the store takes writes again once space returns.
+// Row 4.3 (P0-4, D7): a session whose store cannot write fails closed: the send fails, an error is
+// logged and the session disconnects.
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -12,18 +15,46 @@
 #include "Exceptions.h"
 #include "FaultyFile.h"
 #include "FileStore.h"
+#include "FixFields.h"
+#include "Message.h"
 #include "SessionID.h"
+#include "SessionPair.h"
 #include "Utility.h"
 
 namespace {
+
+constexpr std::chrono::seconds kWait{5};
+
+// A logged-on session pair whose session stores its messages in `dir`.
+krx::PairOptions OnFileStore(const krx::TempDir& dir) {
+  krx::PairOptions options;
+  options.file_store_dir = dir.Path().string();
+  return options;
+}
+
+void LogOn(krx::SessionPair& pair) {
+  pair.Write(pair.Logon(1));
+  REQUIRE(pair.WaitLoggedOn(kWait));
+  REQUIRE((krx::MsgTypeOf(pair.ReadFrame(kWait)) == "A"));
+}
+
+// An order from the gateway (a BusinessMessageReject stands in for it, as in the socket rows).
+FIX::Message Order() {
+  FIX::Message order;
+  order.getHeader().setField(FIX::MsgType("j"));
+  order.setField(FIX::RefMsgType("D"));
+  order.setField(FIX::BusinessRejectReason(0));
+  order.setField(FIX::Text(std::string(200, 'o')));
+  return order;
+}
 
 FIX::SessionID StoreSession() {
   return {"FIX.4.4", "KRXGW", "KRXEX"};
 }
 
 // The store's body file (the messages themselves) in `dir`.
-std::filesystem::path BodyFile(const krx::TempDir& dir) {
-  return dir.Path() / "FIX.4.4-KRXGW-KRXEX.body";
+std::filesystem::path BodyFile(const krx::TempDir& dir, const std::string& counterparty = "KRXEX") {
+  return dir.Path() / ("FIX.4.4-KRXGW-" + counterparty + ".body");
 }
 
 std::filesystem::path HeaderFile(const krx::TempDir& dir) {
@@ -128,6 +159,27 @@ SCENARIO("A failed header write leaves neither the message nor its body behind",
         REQUIRE((failed && last == "<missing>" && Read(store, 1000050) == "x" &&
                  std::filesystem::file_size(BodyFile(dir)) == body_before &&
                  std::filesystem::file_size(HeaderFile(dir)) == header_before));
+      }
+    }
+  }
+}
+
+SCENARIO("A failed write stops order flow and disconnects the session with an error logged",
+         "[krx][v1][p0-4]") {
+  GIVEN("a logged-on session that stores its messages in files") {
+    const krx::TempDir dir("store43");
+    krx::SessionPair pair("KRXSF43", OnFileStore(dir));
+    LogOn(pair);
+    WHEN("the gateway sends an order while the store's files may not grow") {
+      bool sent = true;
+      {
+        const krx::FileSizeLimit full(std::filesystem::file_size(BodyFile(dir, "KRXSF43")) + 10);
+        sent = pair.Send(Order());
+      }
+      const bool closed = pair.WaitClosed(kWait);
+      THEN("the send fails, a store error is logged, and the session disconnects") {
+        INFO(pair.Events().Dump());
+        REQUIRE((!sent && pair.Events().Contains("Store write failed") && closed));
       }
     }
   }

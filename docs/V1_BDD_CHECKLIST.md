@@ -70,7 +70,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 |---|---|---|
 | [x] 4.1 | After a failed write, earlier messages can still be read from the store | 4.1, 4.2 |
 | [x] 4.2 | After a failed write, the store accepts writes once space returns | 4.2 |
-| [ ] 4.3 | A failed write stops order flow and disconnects the session with an error logged | 4.2 |
+| [x] 4.3 | A failed write stops order flow and disconnects the session with an error logged | 4.2 |
 | [ ] 4.4 | A restart after a failed write loads only consistent records | 4.3 |
 | [ ] 4.5 | With store sync on, a stored message and its seqnum are on disk before `send()` returns | 4.4 |
 | [ ] 4.6 | A message with an embedded NUL comes back from the store whole | 4.5 |

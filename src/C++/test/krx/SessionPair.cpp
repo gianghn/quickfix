@@ -59,7 +59,8 @@ FIX::TimeRange AllDay() {
 }  // namespace
 
 SessionPair::SessionPair(const std::string& counterparty, const PairOptions& options)
-    : id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
+    : store_(options.file_store_dir),
+      id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
       session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_,
                Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_) {
   // Before the reader thread starts, so the store needs no lock.
