@@ -180,9 +180,11 @@ bool ThreadedSocketConnection::connect()
   // KRX fork (P1-12): a blocking connect to a host that drops packets waited for the kernel (75 s
   // on macOS, 127 s on Linux) before the initiator could try the next host; now at most 2 s. The
   // socket stays non-blocking, as the first send makes it anyway (P0-3).
+  // A host name that does not resolve fails here without connecting; any other connect is decided
+  // by waitConnected (poll, then SO_ERROR).
   socket_setnonblock( m_socket );
   errno = 0;
-  if ( socket_connect( getSocket(), m_address.c_str(), m_port ) < 0 && errno != EINPROGRESS )
+  if ( socket_connect( getSocket(), m_address.c_str(), m_port ) != 0 && errno != EINPROGRESS )
     return false;
   return waitConnected( m_socket, 2000 );
 #endif
