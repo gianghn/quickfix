@@ -181,10 +181,12 @@ jobs:
       - name: Mutation testing
         env:
           GATE: ${{ github.event_name == 'pull_request' && '--mutation-score-threshold=80' || '--allow-surviving' }}
+        # --timeout above the script's own limits (60 s krx_ut + 120 s ut), so those decide: Mull's
+        # default timed out the warm-up once krx_ut passed about 20 s in this -O0 build (#34).
         run: |
           for binary in "$KRX_BUILD/src/C++/test/krx/krx_ut" "$KRX_BUILD/src/C++/test/ut"; do
-            mull-runner-18 --workers 4 --reporters IDE --reporters GitHubAnnotations "$GATE" \
-              --test-program test/krx/mutation-tests.sh "$binary"
+            mull-runner-18 --workers 4 --timeout 200000 --reporters IDE --reporters GitHubAnnotations \
+              "$GATE" --test-program test/krx/mutation-tests.sh "$binary"
           done
 
   # Plan item 1.7: libFuzzer over FixInput's five modes, 30 minutes a night, ASan on. A crash fails
