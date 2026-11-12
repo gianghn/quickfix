@@ -62,14 +62,14 @@ The owner may change any of these before its phase starts.
 
 | # | Question | Options | Recommended | Blocks | Answer |
 |---|---|---|---|---|---|
-| Q1 | How do we make the store durable against host crash or power loss (P0-5)? | opt-in `fdatasync` group commit plus reconciliation runbook · reconciliation runbook only · `fdatasync` only | opt-in `fdatasync` group commit plus reconciliation runbook | Phase 4 | |
-| Q2 | May `Session::send()`/`sendToTarget` return `false` when the message was stored but not written to the socket (P0-6)? quickfix-rs and the gateway are the only callers we know. | return `false` when not written · keep `true`, add a new "sent" query · keep as is, gateway checks `is_logged_on()` only | return `false` when not written | Phase 5 | |
-| Q3 | What happens to an inbound application message that fails dictionary validation (P0-8)? | dictionary superset of the HOSE spec plus alert on every 35=3/35=j · also patch the engine to deliver it to `fromApp` with a flag · validation off for app messages | dictionary superset of the HOSE spec plus alert on every 35=3/35=j | Phase 5 | |
-| Q4 | What does the gateway do when a callback panics (P0-9)? | abort the process (`panic = "abort"`) · disconnect the session and keep the process | abort the process (`panic = "abort"`) | Phase 9 | |
-| Q5 | Does the gateway run with `NonStopSession=Y`? If so #783 becomes P0 (P1-8). | no · yes | no | Phase 7 | |
-| Q6 | How is the exchange link encrypted (P2-2)? | no TLS on the leased line · stunnel/HAProxy in front · built-in ThreadedSSL with #677/#751/#713 | stunnel/HAProxy in front | Phases 7, 13 | |
-| Q7 | Do we offer our fixes upstream (public PRs)? | yes, after go-live · yes, as each lands · no | yes, after go-live | Phase 12 | |
-| Q8 | Who signs the P1 risk records and the go/no-go (engineering, risk, compliance, operations)? | named approvers per area · CTO alone | named approvers per area | Phase 14 | |
+| Q1 | How do we make the store durable against host crash or power loss (P0-5)? | opt-in `fdatasync` group commit plus reconciliation runbook · reconciliation runbook only · `fdatasync` only | opt-in `fdatasync` group commit plus reconciliation runbook | Phase 4 | **sync plus runbook** (owner, 12 Nov 2026); if the sync costs too much speed, we look at it again |
+| Q2 | May `Session::send()`/`sendToTarget` return `false` when the message was stored but not written to the socket (P0-6)? quickfix-rs and the gateway are the only callers we know. | return `false` when not written · keep `true`, add a new "sent" query · keep as is, gateway checks `is_logged_on()` only | return `false` when not written | Phase 5 | **return `false`** (owner, 12 Nov 2026); the gateway refuses PossDup orders in `toApp` so a stored order never goes out late (Phase 10) |
+| Q3 | What happens to an inbound application message that fails dictionary validation (P0-8)? | dictionary superset of the HOSE spec plus alert on every 35=3/35=j · also patch the engine to deliver it to `fromApp` with a flag · validation off for app messages | dictionary superset of the HOSE spec plus alert on every 35=3/35=j | Phase 5 | **full dictionary plus alerts** (owner, 12 Nov 2026); the KRX spec is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml` (32 messages, 978 fields) |
+| Q4 | What does the gateway do when a callback panics (P0-9)? | abort the process (`panic = "abort"`) · disconnect the session and keep the process | abort the process (`panic = "abort"`) | Phase 9 | **alert the monitoring, then abort** (owner, 12 Nov 2026): the panic is logged and raised as an alert before the process stops |
+| Q5 | Does the gateway run with `NonStopSession=Y`? If so #783 becomes P0 (P1-8). | no · yes | no | Phase 7 | **no** (owner, 12 Nov 2026): operations restart the gateway every day; #783 stays P1 |
+| Q6 | How is the exchange link encrypted (P2-2)? | no TLS on the leased line · stunnel/HAProxy in front · built-in ThreadedSSL with #677/#751/#713 | stunnel/HAProxy in front | Phases 7, 13 | **no TLS** on the leased line (owner, 12 Nov 2026): 7.4 (the SSL picks) is not needed; Phase 13 records the unencrypted link as an accepted risk |
+| Q7 | Do we offer our fixes upstream (public PRs)? | yes, after go-live · yes, as each lands · no | yes, after go-live | Phase 12 | **no** (owner, 12 Nov 2026): fixes stay in the fork |
+| Q8 | Who signs the P1 risk records and the go/no-go (engineering, risk, compliance, operations)? | named approvers per area · CTO alone | named approvers per area | Phase 14 | **the CTO alone** (owner, 12 Nov 2026) |
 
 ## Ground rules
 
@@ -110,7 +110,7 @@ The owner may change any of these before its phase starts.
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner.
 5. Phase 3 handover note; Progress row to done.
 6. Phase 6 (6.1, 6.2, 6.4–6.6; 6.3 is done) and Phase 8: no owner question blocks them.
-7. **Owner:** answer Q1 (Phase 4), Q2 and Q3 (Phase 5), Q5 and Q6 (Phase 7); tell us the gateway's cores and any CPU limit (3.8c); ask HOSE for the member FIX spec (Phases 10, 11, 14).
+7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
 ## Phases
 
@@ -273,10 +273,9 @@ Non-code; each item has an owner and evidence filed with the go/no-go pack.
 
 ### For the owner
 
-- Answer **Q1** before Phase 4, **Q2** and **Q3** before Phase 5, **Q5** and **Q6** before Phase 7,
-  **Q4** before Phase 9, **Q7** before Phase 12, **Q8** before Phase 13 closes.
-- Ask HOSE for the member FIX spec, throttles and certification script early: Phases 10, 11 and
-  14 need them and the research could not see them.
+- Q1–Q8 are answered (12 Nov 2026, in the table above).
+- The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`. HOSE's throttles and
+  certification script are still needed for Phases 10, 11 and 14.
 - Merge the PRs in order (`agent/v1-p1`, `p2`, …); never merge a phase whose CI matrix is not
   green in Release, ASan+UBSan and TSan.
 
