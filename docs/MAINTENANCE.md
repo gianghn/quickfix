@@ -151,6 +151,11 @@ Line coverage says a line ran; a mutation run says a test would notice if it wer
   reported as the call surviving; no test can kill it (a leak). Found on PR #20: the same mutant
   applied by hand failed the test. In new code, pass a named string
   (`const std::string event = e.what(); m_state.onEvent( event );`), which Mull leaves alone.
+- **Accepted equivalent mutants** (the owner's call, each with the item that revisits it):
+  - `Session::generateRetransmits`, `std::this_thread::yield()` in the wait that lets threads take
+    `m_mutex` between resent messages (#31, owner 12 Nov 2026). Removing it leaves a spin on the
+    same condition; no test can see the difference, so the PR gate fails on it (75 %). Revisited
+    by plan item 3.8, which measures yield against spin on 1, 2 and 4 CPUs.
 - Record scores per function in `test/krx/BASELINE.md`; a score may not drop between releases.
 
 ## 6. Sanitizers, static analysis and fuzzing

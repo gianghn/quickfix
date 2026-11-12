@@ -26,7 +26,9 @@
 #include "Session.h"
 #include "Values.h"
 #include <algorithm>
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 namespace FIX
 {
@@ -452,9 +454,20 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   int current = beginSeqNo;
   bool appMessageJustSent = false;
   std::string messageString;
+  const Responder* const responder = m_pResponder;
 
   for ( i = messages.begin(); i != messages.end(); ++i )
   {
+    // KRX fork (P0-3): the caller holds m_mutex; before each message, let the threads waiting for
+    // it in (up to 10 ms, so a stream of senders cannot stall the resend), and stop if the
+    // connection went away meanwhile.
+    {
+      const ReverseLocker unlocked( m_mutex );
+      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
+      while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
+        std::this_thread::yield();
+    }
+    if ( m_pResponder != responder ) return;
     appMessageJustSent = false;
     std::unique_ptr<FIX::Message> pMsg;
     std::string strMsgType;
@@ -612,7 +625,9 @@ bool Session::send( Message& message )
 
 bool Session::sendRaw( Message& message, int num )
 {
+  ++m_mutexWaiters;  // KRX fork (P0-3): a long resend lets us in (generateRetransmits)
   Locker l( m_mutex );
+  --m_mutexWaiters;
 
   try
   {
@@ -706,7 +721,9 @@ void Session::disconnect()
     if ( shutDown ) shutDown->disconnect();
   }
 
+  ++m_mutexWaiters;  // a long resend lets us in (generateRetransmits)
   Locker l(m_mutex);
+  --m_mutexWaiters;
 
   {
     const Locker r( m_responderMutex );

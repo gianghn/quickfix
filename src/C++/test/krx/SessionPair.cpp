@@ -193,6 +193,12 @@ bool EventLog::Contains(std::string_view text) const {
                              [text](const std::string& event) { return event.contains(text); });
 }
 
+std::size_t EventLog::Count(std::string_view text) const {
+  const std::scoped_lock lock(mutex_);
+  return static_cast<std::size_t>(std::ranges::count_if(
+      events_, [text](const std::string& event) { return event.contains(text); }));
+}
+
 std::string EventLog::Dump() const {
   const std::scoped_lock lock(mutex_);
   std::string all;

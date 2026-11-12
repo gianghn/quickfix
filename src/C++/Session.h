@@ -36,6 +36,7 @@
 #include "Mutex.h"
 #include "Log.h"
 
+#include <atomic>
 #include <utility>
 #include <map>
 #include <queue>
@@ -377,6 +378,9 @@ private:
   LogFactory* m_pLogFactory;
   Responder* m_pResponder;
   Mutex m_mutex;
+  // KRX fork (P0-3): threads waiting for m_mutex in sendRaw or disconnect; a long resend lets them
+  // in between chunks (a mutex does not hand over by itself: the releasing thread takes it back).
+  std::atomic<int> m_mutexWaiters{0};
   // KRX fork (P0-3): guards m_pResponder's changes, so disconnect() can shut the connection down
   // without m_mutex, which a sender stuck in send holds.
   Mutex m_responderMutex;
