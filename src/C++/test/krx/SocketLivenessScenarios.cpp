@@ -3,6 +3,8 @@
 // session disconnects, instead of blocking the thread (and the session lock) for ever.
 // Row 3.3 (P0-3): every session socket has keepalive and, on Linux, a TCP user timeout of two
 // heartbeat intervals, so the kernel drops a peer that stops acknowledging.
+// Rows 3.2 and 3.4 (P0-3): disconnect() releases a sender stuck in send at once, before it waits
+// for the session lock that sender holds.
 #include <chrono>
 #include <string>
 
@@ -193,6 +195,28 @@ SCENARIO("When the counterparty stops reading the send fails and the session dis
              << pair.Events().Dump());
         REQUIRE(
             (timed_out && took < std::chrono::milliseconds(300 + 1000) && pair.WaitClosed(kWait)));
+      }
+    }
+  }
+}
+
+SCENARIO("disconnect releases a sender stuck in send before it waits for the session lock",
+         "[krx][v1][security][p0-3]") {
+  GIVEN("a session stuck sending a large resend to a counterparty that reads nothing") {
+    krx::SessionPair pair("KRXDC34", WithLargeMessage5("KRXDC34", 10000));
+    LogOn(pair);
+    AskForMessage5(pair);
+    REQUIRE(pair.WaitForEvent("Received ResendRequest", kWait));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // into the stuck send
+    WHEN("the gateway disconnects the session") {
+      const auto start = std::chrono::steady_clock::now();
+      pair.Disconnect();
+      const auto took = std::chrono::steady_clock::now() - start;
+      THEN("disconnect returns at once, not after the 10 s send timeout") {
+        INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+             << " ms; events:\n"
+             << pair.Events().Dump());
+        REQUIRE((took < std::chrono::seconds(2) && !pair.Events().Contains("Send timed out")));
       }
     }
   }

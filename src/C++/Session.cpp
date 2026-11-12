@@ -697,14 +697,28 @@ bool Session::send( const std::string& string )
 
 void Session::disconnect()
 {
+  // KRX fork (P0-3): shut the connection down first, so a sender stuck in send (holding m_mutex)
+  // fails at once instead of when its send timeout runs out. Each responder is disconnected once.
+  Responder* shutDown = nullptr;
+  {
+    const Locker r( m_responderMutex );
+    shutDown = m_pResponder;
+    if ( shutDown ) shutDown->disconnect();
+  }
+
   Locker l(m_mutex);
 
-  if ( m_pResponder )
   {
-    m_state.onEvent( "Disconnecting" );
+    const Locker r( m_responderMutex );
+    if ( m_pResponder )
+    {
+      // A named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+      const std::string event = "Disconnecting";
+      m_state.onEvent( event );
 
-    m_pResponder->disconnect();
-    m_pResponder = 0;
+      if ( m_pResponder != shutDown ) m_pResponder->disconnect();
+      m_pResponder = nullptr;
+    }
   }
 
   if ( m_state.receivedLogon() || m_state.sentLogon() )

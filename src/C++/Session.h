@@ -249,6 +249,7 @@ public:
       refresh();
     if( !checkSessionTime(m_timestamper()) )
       reset();
+    const Locker l( m_responderMutex );
     m_pResponder = pR;
   }
 
@@ -376,6 +377,9 @@ private:
   LogFactory* m_pLogFactory;
   Responder* m_pResponder;
   Mutex m_mutex;
+  // KRX fork (P0-3): guards m_pResponder's changes, so disconnect() can shut the connection down
+  // without m_mutex, which a sender stuck in send holds.
+  Mutex m_responderMutex;
 
   static Sessions s_sessions;
   static SessionIDs s_sessionIDs;
