@@ -895,6 +895,20 @@ AppDataDictionary.FIX.4.4=FIX44.xml
           <td></td>
         </tr>
 
+        <tr align="left" valign="middle">
+          <td><b>FileStoreSync</b></td>
+
+          <td>(KRX fork) Force every stored message and its sequence
+          numbers to disk (<code>fdatasync</code>) before the message is
+          sent, so a host crash or power loss cannot lose them. Costs
+          speed: measure it on the production disk.</td>
+
+          <td>Y<br>
+          N</td>
+
+          <td>N</td>
+        </tr>
+
         <tr align="center" valign="middle">
           <td colspan="4" bgcolor="#BBBBBB"><h3>MYSQL</h3></td>
         </tr>

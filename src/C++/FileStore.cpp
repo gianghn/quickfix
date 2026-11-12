@@ -29,12 +29,19 @@
 #include "Utility.h"
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <system_error>
+#ifdef _MSC_VER
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace FIX
 {
-FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID )
-: m_cache( now ), m_msgFile( 0 ), m_headerFile( 0 ), m_seqNumsFile( 0 ), m_sessionFile( 0 )
+FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync )
+: m_cache( now ), m_msgFile( nullptr ), m_headerFile( nullptr ), m_seqNumsFile( nullptr ),
+  m_sessionFile( nullptr ), m_sync( sync )
 {
   file_mkdir( path.c_str() );
 
@@ -190,12 +197,13 @@ void FileStore::populateCache()
 
 MessageStore* FileStoreFactory::create( const UtcTimeStamp& now, const SessionID& sessionID )
 {
-  if ( m_path.size() ) return new FileStore( now, m_path, sessionID );
+  if ( !m_path.empty() ) return std::make_unique<FileStore>( now, m_path, sessionID, m_sync ).release();
 
   std::string path;
   Dictionary settings = m_settings.get( sessionID );
   path = settings.getString( FILE_STORE_PATH );
-  return new FileStore( now, path, sessionID );
+  const bool sync = settings.has( FILE_STORE_SYNC ) && settings.getBool( FILE_STORE_SYNC );
+  return std::make_unique<FileStore>( now, path, sessionID, sync ).release();
 }
 
 void FileStoreFactory::destroy( MessageStore* pStore )
@@ -235,6 +243,7 @@ EXCEPT ( IOException )
     rollBack( offset, headerEnd, headerError );
 
   m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
+  m_unsyncedMessages = true; // synced with the seqnums that follow (P0-5)
   return true;
 }
 
@@ -345,8 +354,36 @@ void FileStore::setSeqNum()
            getNextSenderMsgSeqNum(), getNextTargetMsgSeqNum() );
   if ( ferror( m_seqNumsFile ) ) 
     throw IOException( "Unable to write to file " + m_seqNumsFileName );
-  if ( fflush( m_seqNumsFile ) ) 
+  if ( fflush( m_seqNumsFile ) )
     throw IOException( "Unable to flush file " + m_seqNumsFileName );
+  if ( m_sync ) syncToDisk();
+}
+
+// KRX fork (P0-5): forces the messages set() wrote since the last sync (body, then header) and the
+// seqnums to disk. Persisting a message writes it, then its seqnum: one sync point per message.
+void FileStore::syncToDisk()
+{
+  if ( m_unsyncedMessages )
+  {
+    syncFile( m_msgFile, m_msgFileName );
+    syncFile( m_headerFile, m_headerFileName );
+    m_unsyncedMessages = false;
+  }
+  syncFile( m_seqNumsFile, m_seqNumsFileName );
+}
+
+void FileStore::syncFile( FILE* file, const std::string& name )
+{
+#ifdef _MSC_VER
+  const int result = _commit( _fileno( file ) );
+#elif defined( __APPLE__ )
+  const int result = fsync( fileno( file ) ); // macOS has no fdatasync
+#else
+  const int result = fdatasync( fileno( file ) );
+#endif
+  if ( result != 0 )
+    throw IOException( "Unable to sync file " + name + ": " + error_strerror() );
+  ++m_syncCount;
 }
 
 void FileStore::setSession()

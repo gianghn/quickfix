@@ -105,21 +105,23 @@ class LogonWatcher : public FIX::Application {
 };
 
 // Keeps the one store it creates, so a test can seed it before the session runs: a MemoryStore, or
-// a FileStore in `file_dir` when that is not empty.
+// a FileStore in `file_dir` when that is not empty (syncing to disk when `sync`).
 class KeptStoreFactory : public FIX::MemoryStoreFactory {
  public:
-  explicit KeptStoreFactory(std::string file_dir = "") : file_dir_(std::move(file_dir)) {}
+  explicit KeptStoreFactory(std::string file_dir = "", bool sync = false)
+      : file_dir_(std::move(file_dir)), sync_(sync) {}
 
   [[nodiscard]] FIX::MessageStore* Store() const { return store_; }
 
   FIX::MessageStore* create(const FIX::UtcTimeStamp& now, const FIX::SessionID& id) override {
     store_ = file_dir_.empty() ? FIX::MemoryStoreFactory::create(now, id)
-                               : FIX::FileStoreFactory(file_dir_).create(now, id);
+                               : FIX::FileStoreFactory(file_dir_, sync_).create(now, id);
     return store_;
   }
 
  private:
   std::string file_dir_;
+  bool sync_;
   FIX::MessageStore* store_{nullptr};
 };
 
@@ -128,9 +130,10 @@ class KeptStoreFactory : public FIX::MemoryStoreFactory {
 struct PairOptions {
   bool preserve_field_order{false};
   std::map<int, std::string> stored_messages;
-  int send_timeout_ms{0};      // 0: the session's default
-  bool tcp{false};             // a loopback TCP pair instead of a socketpair (for TCP options)
-  std::string file_store_dir;  // a FileStore in this directory instead of a MemoryStore
+  int send_timeout_ms{0};       // 0: the session's default
+  bool tcp{false};              // a loopback TCP pair instead of a socketpair (for TCP options)
+  std::string file_store_dir;   // a FileStore in this directory instead of a MemoryStore
+  bool file_store_sync{false};  // that FileStore syncs to disk (FileStoreSync=Y)
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
@@ -165,6 +168,9 @@ class SessionPair {
   void ThrowFromAdmin() { application_.ThrowFromAdmin(); }
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
+
+  // The session's store (a FileStore when PairOptions.file_store_dir was set).
+  [[nodiscard]] FIX::MessageStore* Store() const { return store_.Store(); }
 
   // The gateway sends `message` (its MsgType set), from whichever thread calls this.
   bool Send(FIX::Message message) { return session_.send(message); }

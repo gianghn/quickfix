@@ -6,9 +6,11 @@
 // logged and the session disconnects.
 // Row 4.4 (P0-4): a restart loads only records whose message is whole in the body file.
 // Row 4.6 (P2-4): a stored message comes back with every byte, NULs included.
+// Row 4.5 (P0-5): with FileStoreSync=Y, body, header and seqnums are synced before send returns.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@
 #include "Message.h"
 #include "SessionID.h"
 #include "SessionPair.h"
+#include "SessionSettings.h"
 #include "Utility.h"
 
 namespace {
@@ -38,6 +41,12 @@ void LogOn(krx::SessionPair& pair) {
   pair.Write(pair.Logon(1));
   REQUIRE(pair.WaitLoggedOn(kWait));
   REQUIRE((krx::MsgTypeOf(pair.ReadFrame(kWait)) == "A"));
+}
+
+// How many times `store` (a FileStore) has forced its files to disk.
+std::uint64_t SyncsOf(const FIX::MessageStore* store) {
+  const auto* file_store = dynamic_cast<const FIX::FileStore*>(store);
+  return file_store == nullptr ? 0 : file_store->getSyncCount();
 }
 
 // An order from the gateway (a BusinessMessageReject stands in for it, as in the socket rows).
@@ -228,6 +237,65 @@ SCENARIO("A message with an embedded NUL comes back from the store whole", "[krx
         const std::string back = Read(store, 1);
         INFO(back.size() << " of " << message.size() << " bytes back");
         REQUIRE((back == message));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync on, a stored message and its seqnum are on disk before send() returns",
+         "[krx][v1][p0-5]") {
+  GIVEN("a logged-on session whose file store syncs to disk") {
+    const krx::TempDir dir("store45");
+    krx::PairOptions options = OnFileStore(dir);
+    options.file_store_sync = true;
+    krx::SessionPair pair("KRXSY45", options);
+    LogOn(pair);
+    WHEN("the gateway sends an order") {
+      const std::uint64_t before = SyncsOf(pair.Store());
+      const bool sent = pair.Send(Order());
+      const std::uint64_t after = SyncsOf(pair.Store());
+      THEN("body, header and seqnums are synced by the time send returns") {
+        INFO(before << " file syncs before the send, " << after << " after");
+        REQUIRE((sent && after - before >= 3));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync off, the store does not force anything to disk", "[krx][v1][p0-5]") {
+  GIVEN("a logged-on session on a file store with sync off (the default)") {
+    const krx::TempDir dir("store45off");
+    krx::SessionPair pair("KRXSN45", OnFileStore(dir));
+    LogOn(pair);
+    WHEN("the gateway sends an order") {
+      const bool sent = pair.Send(Order());
+      THEN("the store never synced") {
+        const std::uint64_t syncs = SyncsOf(pair.Store());
+        INFO(syncs << " syncs");
+        REQUIRE((sent && syncs == 0));
+      }
+    }
+  }
+}
+
+SCENARIO("FileStoreSync=Y in the session settings turns store sync on", "[krx][v1][p0-5]") {
+  GIVEN("session settings with FileStorePath and FileStoreSync=Y") {
+    const krx::TempDir dir("store45cfg");
+    std::istringstream text(
+        "[DEFAULT]\nConnectionType=acceptor\nFileStorePath=" + dir.Path().string() +
+        "\nFileStoreSync=Y\n[SESSION]\nBeginString=FIX.4.4\n"
+        "SenderCompID=KRXGW\nTargetCompID=KRXEX\n");
+    const FIX::SessionSettings settings(text);
+    FIX::FileStoreFactory factory(settings);
+    WHEN("the factory's store keeps a message and its seqnum") {
+      FIX::MessageStore* store = factory.create(FIX::UtcTimeStamp::now(), StoreSession());
+      store->set(1, Message(1));
+      store->incrNextSenderMsgSeqNum();
+      const std::uint64_t syncs = SyncsOf(store);
+      factory.destroy(store);
+      THEN("it synced them to disk") {
+        INFO(syncs << " syncs");
+        REQUIRE((syncs > 0));
       }
     }
   }

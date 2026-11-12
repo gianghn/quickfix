@@ -33,6 +33,19 @@ build/rel/src/C++/test/krx/krx_bench file 200000 20000 7822 /tmp/bench
 For an older engine, compile `Bench.cpp` against that build's `libquickfix` with
 `-DKRX_SPEC_DIR=\"<repo>/spec\"` and its `src/C++` include path.
 
+## FileStoreSync, 12 Nov 2026 (plan item 4.4, U-9)
+
+`krx_bench file` against `krx_bench sync` (the same with `FileStoreSync=Y`), Release, 20,000
+orders and 5,000 round trips per run (sync is slow), the same Mac, three interleaved runs, medians.
+A round trip persists two messages (one each side), each three file syncs. macOS `fsync` does not
+flush the drive's cache, so these are not the production numbers: plan item 11.7 measures them
+on the production disk with Linux `fdatasync`.
+
+| Store | msg/s end-to-end | RTT p50 µs | p99 µs | p99.9 µs |
+|---|---|---|---|---|
+| file, sync off | 66,935 | 59.6 | 88.4 | 118.0 |
+| file, `FileStoreSync=Y` | 12,677 | 200.9 | 252.4 | 372.4 |
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4
