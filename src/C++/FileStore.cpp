@@ -27,6 +27,8 @@
 #include "SessionID.h"
 #include "Parser.h"
 #include "Utility.h"
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -39,6 +41,39 @@
 
 namespace FIX
 {
+namespace
+{
+// KRX fork (P0-5): the number written in decimal at `pos` in `data`; `pos` moves past its digits
+// (a std::string ends in '\0', which stops the loop). 0 when there are none.
+std::size_t digitsAt( const std::string& data, std::size_t& pos )
+{
+  std::size_t value = 0;
+  while ( std::isdigit( static_cast<unsigned char>( data[ pos ] ) ) )
+    value = ( value * 10 ) + static_cast<std::size_t>( data[ pos++ ] - '0' );
+  return value;
+}
+
+// KRX fork (P0-5): the size of the FIX message that starts at `pos` in `data` ("8=", BodyLength,
+// then CheckSum "10=nnn"), or 0 when none starts there or it is cut short. `msgSeqNum` gets its
+// MsgSeqNum (34), or 0 when it has none.
+std::size_t frameAt( const std::string& data, std::size_t pos, int& msgSeqNum )
+{
+  const std::size_t lengthTag = data.find( "\0019=", pos );
+  if ( data.compare( pos, 2, "8=" ) != 0 || lengthTag == std::string::npos )
+    return 0;
+  std::size_t bodyStart = lengthTag + 3;
+  const std::size_t bodyLength = digitsAt( data, bodyStart );
+  const std::size_t end = bodyStart + 1 + bodyLength + 7; // SOH, body, "10=nnn" SOH
+  if ( end > data.size() || data.compare( end - 7, 3, "10=" ) != 0 || data[ end - 1 ] != '\001' )
+    return 0;
+  const std::string frame = data.substr( pos, end - pos );
+  const std::size_t seqNumTag = frame.find( "\00134=" );
+  std::size_t seqNumStart = seqNumTag + 4;
+  msgSeqNum = seqNumTag == std::string::npos ? 0 : static_cast<int>( digitsAt( frame, seqNumStart ) );
+  return end - pos;
+}
+}
+
 FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync )
 : m_cache( now ), m_msgFile( nullptr ), m_headerFile( nullptr ), m_seqNumsFile( nullptr ),
   m_sessionFile( nullptr ), m_sync( sync )
@@ -132,6 +167,7 @@ void FileStore::open( bool deleteFile )
     "Could not open session file " + error_strerror() );
   if ( setCreationTime ) setSession();
 
+  recoverUnindexed(); // KRX fork (P0-5)
   setNextSenderMsgSeqNum( getNextSenderMsgSeqNum() );
   setNextTargetMsgSeqNum( getNextTargetMsgSeqNum() );
 }
@@ -231,8 +267,10 @@ EXCEPT ( IOException )
 
   // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each flushed;
   // the message is in m_offsets only once both are on file. Any failure puts both files back.
-  if ( fwrite( msg.data(), sizeof( char ), size, m_msgFile ) != size || fflush( m_msgFile ) == EOF )
-    rollBack( offset, headerEnd, "Unable to write to file " + m_msgFileName );
+  // P0-5: with FileStoreSync the body is on disk before the header record is written.
+  if ( fwrite( msg.data(), sizeof( char ), size, m_msgFile ) != size || fflush( m_msgFile ) == EOF
+       || ( m_sync && !syncedToDisk( m_msgFile ) ) )
+    rollBack( offset, headerEnd, "Unable to write or sync file " + m_msgFileName );
   const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
     + std::to_string( size ) + " ";
   if ( fwrite( record.data(), sizeof( char ), record.size(), m_headerFile ) != record.size()
@@ -240,7 +278,6 @@ EXCEPT ( IOException )
     rollBack( offset, headerEnd, "Unable to write to file " + m_headerFileName );
 
   m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
-  m_unsyncedMessages = true; // synced with the seqnums that follow (P0-5)
   return true;
 }
 
@@ -353,23 +390,14 @@ void FileStore::setSeqNum()
     throw IOException( "Unable to write to file " + m_seqNumsFileName );
   if ( fflush( m_seqNumsFile ) )
     throw IOException( "Unable to flush file " + m_seqNumsFileName );
-  if ( m_sync ) syncToDisk();
+  // KRX fork (P0-5): the body rebuilds the next sender seqnum up to its last message, so only a
+  // seqnum past it (PersistMessages=N, a reset) needs a sync; the target seqnum never does.
+  const int lastStored = m_offsets.empty() ? 0 : m_offsets.rbegin()->first;
+  if ( m_sync && getNextSenderMsgSeqNum() > lastStored + 1 && !syncedToDisk( m_seqNumsFile ) )
+    throw IOException( "Unable to sync file " + m_seqNumsFileName + ": " + error_strerror() );
 }
 
-// KRX fork (P0-5): forces the messages set() wrote since the last sync (body, then header) and the
-// seqnums to disk. Persisting a message writes it, then its seqnum: one sync point per message.
-void FileStore::syncToDisk()
-{
-  if ( m_unsyncedMessages )
-  {
-    syncFile( m_msgFile, m_msgFileName );
-    syncFile( m_headerFile, m_headerFileName );
-    m_unsyncedMessages = false;
-  }
-  syncFile( m_seqNumsFile, m_seqNumsFileName );
-}
-
-void FileStore::syncFile( FILE* file, const std::string& name )
+bool FileStore::syncedToDisk( FILE* file )
 {
 #ifdef _MSC_VER
   const int result = _commit( _fileno( file ) );
@@ -378,9 +406,50 @@ void FileStore::syncFile( FILE* file, const std::string& name )
 #else
   const int result = fdatasync( fileno( file ) );
 #endif
-  if ( result != 0 )
-    throw IOException( "Unable to sync file " + name + ": " + error_strerror() );
+  if ( result != 0 ) return false;
   ++m_syncCount;
+  return true;
+}
+
+// KRX fork (P0-5): with FileStoreSync only the body is synced, so after a crash the header and
+// seqnums files can lag behind it. The body's messages past the last header record are indexed
+// again (their records written now), the next sender seqnum follows the last of them, and a
+// message cut short at the end of the body is removed.
+void FileStore::recoverUnindexed()
+{
+  std::int64_t covered = 0;
+  for ( const auto& entry : m_offsets )
+    covered = std::max<std::int64_t>( covered, entry.second.first + static_cast<std::int64_t>( entry.second.second ) );
+
+  if ( fseek( m_msgFile, covered, SEEK_SET ) ) return;
+  std::string tail; // usually empty: only a crash leaves messages past the last header record
+  for ( int c = fgetc( m_msgFile ); c != EOF; c = fgetc( m_msgFile ) )
+    tail.push_back( static_cast<char>( c ) );
+
+  std::size_t pos = 0;
+  int msgSeqNum = 0;
+  for ( std::size_t size = frameAt( tail, pos, msgSeqNum ); size != 0; size = frameAt( tail, pos, msgSeqNum ) )
+  {
+    indexRecovered( msgSeqNum, covered + static_cast<std::int64_t>( pos ), size );
+    pos += size;
+  }
+#ifndef _MSC_VER
+  if ( pos != tail.size() && truncate( m_msgFileName.c_str(), covered + static_cast<std::int64_t>( pos ) ) != 0 )
+    throw IOException( "Unable to cut the unfinished message off " + m_msgFileName );
+#endif
+}
+
+void FileStore::indexRecovered( int msgSeqNum, std::int64_t offset, std::size_t size )
+{
+  const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
+    + std::to_string( size ) + " ";
+  if ( fseek( m_headerFile, 0, SEEK_END )
+       || fwrite( record.data(), sizeof( char ), record.size(), m_headerFile ) != record.size()
+       || fflush( m_headerFile ) == EOF )
+    throw IOException( "Unable to write to file " + m_headerFileName );
+  m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
+  if ( msgSeqNum >= m_cache.getNextSenderMsgSeqNum() )
+    m_cache.setNextSenderMsgSeqNum( msgSeqNum + 1 );
 }
 
 void FileStore::setSession()

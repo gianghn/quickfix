@@ -44,7 +44,16 @@ on the production disk with Linux `fdatasync`.
 | Store | msg/s end-to-end | RTT p50 µs | p99 µs | p99.9 µs |
 |---|---|---|---|---|
 | file, sync off | 66,935 | 59.6 | 88.4 | 118.0 |
-| file, `FileStoreSync=Y` | 12,677 | 200.9 | 252.4 | 372.4 |
+| file, `FileStoreSync=Y` (#40: 3 syncs per sent, 1 per received message) | 12,677 | 200.9 | 252.4 | 372.4 |
+
+Option B (#41, owner, 12 Nov 2026): only the body is synced, one sync per sent message and none
+per received one; the header and the next sender seqnum are rebuilt from the body after a crash.
+Same method, a later set of interleaved runs (one sync run had a 13 ms disk stall in its tail):
+
+| Store | msg/s end-to-end | RTT p50 µs | p99 µs | p99.9 µs |
+|---|---|---|---|---|
+| file, sync off | 65,775 | 59.8 | 97.2 | 147.9 |
+| file, `FileStoreSync=Y`, option B | 27,124 | 102.8 | 127.5 | 195.1 |
 
 ## Red list (rows that failed before their fix)
 

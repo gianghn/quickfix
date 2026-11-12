@@ -90,7 +90,7 @@ The owner may change any of these before its phase starts.
 | 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | built, waiting for merge: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30) merged; 3.4 (#31), 3.6 (#32), 3.7 (#33, #34), row 3.2's test (#35) open; 3.8 (benchmark) later |
-| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | built, waiting for merge: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39), 4.4 (#40); the crash runbook (Q1) to write |
+| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | built, waiting for merge: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39), 4.4 (#40, option B #41); the crash runbook (Q1) to write |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
@@ -344,13 +344,19 @@ mutant, checked by hand), sync off, the setting.
 `ubuntu:24.04`, `lint.sh .` passing; threaded FIX.4.4 acceptance 59/59 at #37. CI runs once
 the stack is retargeted to `krx/main`.
 **Measured:** the store change (#36): p99.9 +3.3 %, within the 10 % gate. `FileStoreSync=Y` on a
-Mac: 66,935 → 12,677 msg/s, RTT p99.9 118 → 372 µs (`test/krx/BASELINE.md`).
+Mac: #40 (three syncs per sent message, one per received) 66,935 → 12,677 msg/s, RTT p99.9
+118 → 372 µs; option B (#41, one sync per sent message, none per received) 27,124 msg/s, RTT
+p50 102.8 µs, p99.9 195.1 µs (`test/krx/BASELINE.md`).
 **Decisions taken:** roll back by close, `truncate`, reopen; a dropped record on restart is not
-logged; sync is one sync point per message (three file syncs), `FileStoreSync` default N;
+logged; option B (owner): only the body is synced, the header and the next sender seqnum are
+rebuilt from it on open, and a message cut short at its end is removed; a next sender seqnum the
+body cannot rebuild (PersistMessages=N, a reset) is still synced; `FileStoreSync` default N;
 `FileStore::getSyncCount()` added so a test (and operations) can see the syncs.
 **Away from the spec:** "group commit" across messages is not needed: sends are serialised by
-the session lock, so each message is its own commit; the three syncs per message are the cost.
+the session lock, so each message is its own commit. The next target seqnum is not synced: after
+a crash it can be behind, and the exchange resends (PossDup); the gateway must drop duplicates by
+ExecID (Phase 10).
 **Left for the owner:** the Q1 crash runbook (reconcile seqnums with HOSE after a crash) is not
 written: it needs HOSE's procedure, best in Phase 13 with operations. The sync cost on the
-production disk (11.7) decides whether `FileStoreSync=Y` goes live; if it is too slow, fewer syncs
-per message (one file for body, header and seqnums) is the next step.
+production disk (11.7) decides whether `FileStoreSync=Y` goes live; option C (sync every N ms, a
+setting) is the step after B if it is still too slow.
