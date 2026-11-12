@@ -90,6 +90,25 @@ bool waitWritable( socket_handle s, std::chrono::steady_clock::time_point deadli
   pollfd pfd{ s, POLLOUT, 0 };
   return left > 0 && poll( &pfd, 1, left ) != 0;
 }
+
+// KRX fork (P0-3): keepalive, and the kernel drops the connection once sent data has gone
+// unacknowledged for two heartbeat intervals, so a dead peer is found even while we send. 0 while
+// the heartbeat interval is unknown: the system default.
+void setLiveness( socket_handle s, int heartBtInt )
+{
+  const int on = 1;
+  setsockopt( s, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof( on ) );
+#ifdef TCP_USER_TIMEOUT
+  const int userTimeoutMs = 2 * heartBtInt * 1000;
+  setsockopt( s, IPPROTO_TCP, TCP_USER_TIMEOUT, &userTimeoutMs, sizeof( userTimeoutMs ) );
+#else
+#ifdef TCP_RXT_CONNDROPTIME
+  // macOS: the same, in seconds.
+  const int dropSeconds = 2 * heartBtInt;
+  setsockopt( s, IPPROTO_TCP, TCP_RXT_CONNDROPTIME, &dropSeconds, sizeof( dropSeconds ) );
+#endif
+#endif
+}
 }
 #endif
 
@@ -101,10 +120,11 @@ bool ThreadedSocketConnection::send( const std::string& msg )
   // reading thread to disconnect the session, and the send fails. The socket is made
   // non-blocking (macOS ignores MSG_DONTWAIT on a blocking one); the reading thread only calls
   // recv after poll reports data, so it is not affected.
-  if( !m_nonBlocking )
+  if( !m_socketConfigured )
   {
     socket_setnonblock( m_socket );
-    m_nonBlocking = true;
+    setLiveness( m_socket, m_pSession ? m_pSession->getHeartBtInt() : 0 );
+    m_socketConfigured = true;
   }
   const int timeoutMs = m_pSession ? m_pSession->getSendTimeoutMs() : 15000;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( timeoutMs );
