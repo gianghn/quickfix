@@ -13,6 +13,8 @@
 // at once after a signal, after a pause when it ran out of file descriptors.
 // Row 3.10 (P1-10): the session's timers run once a second even while bytes keep arriving, so a
 // peer trickling bytes is timed out.
+// Row 3.11 (P1-12): a connect gives up after 2 s, so the initiator reaches the backup host fast
+// when the primary drops every packet.
 #include <pthread.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -41,6 +43,7 @@
 #include "SessionPair.h"
 #include "SessionSettings.h"
 #include "ThreadedSocketAcceptor.h"
+#include "ThreadedSocketInitiator.h"
 #include "Utility.h"
 
 namespace {
@@ -243,6 +246,50 @@ class ListeningAcceptor {
   krx::EventLogFactory logs_;
   FIX::SessionSettings settings_;
   FIX::ThreadedSocketAcceptor acceptor_;
+};
+
+// A host that drops every packet (non-routable): a connect to it gets no answer at all.
+constexpr const char* kUnreachableHost = "10.255.255.1";
+
+// The gateway's threaded initiator for one session, with a primary host that drops every packet
+// and a backup on `backup_port`, retrying every second; its events are kept.
+class FailoverInitiator {
+ public:
+  FailoverInitiator(const std::string& counterparty, int backup_port)
+      : settings_(Settings(counterparty, backup_port)),
+        initiator_(application_, store_, settings_, logs_) {
+    initiator_.start();
+  }
+
+  ~FailoverInitiator() { initiator_.stop(true); }
+
+  FailoverInitiator(const FailoverInitiator&) = delete;
+  FailoverInitiator& operator=(const FailoverInitiator&) = delete;
+  FailoverInitiator(FailoverInitiator&&) = delete;
+  FailoverInitiator& operator=(FailoverInitiator&&) = delete;
+
+  [[nodiscard]] const krx::EventLog& Events() const { return logs_.Events(); }
+
+ private:
+  static FIX::SessionSettings Settings(const std::string& counterparty, int backup_port) {
+    const std::string port = std::to_string(backup_port);
+    std::istringstream stream(
+        "[DEFAULT]\nConnectionType=initiator\nReconnectInterval=1\nHeartBtInt=30\n"
+        "StartTime=00:00:00\nEndTime=00:00:00\nUseDataDictionary=N\n[SESSION]\n"
+        "BeginString=FIX.4.4\nSenderCompID=" +
+        counterparty + "\nTargetCompID=KRXGW\nSocketConnectHost=" + kUnreachableHost +
+        "\nSocketConnectPort=" + port +
+        "\nSocketConnectHost1=127.0.0.1\nSocketConnectPort1=" + port + "\n");
+    FIX::SessionSettings settings;
+    stream >> settings;
+    return settings;
+  }
+
+  FIX::NullApplication application_;
+  FIX::MemoryStoreFactory store_;
+  krx::EventLogFactory logs_;
+  FIX::SessionSettings settings_;
+  FIX::ThreadedSocketInitiator initiator_;
 };
 
 // Blocks SIGUSR1 in the calling thread while it lives, so a signal sent to the process goes to a
@@ -603,6 +650,26 @@ SCENARIO("A counterparty trickling one byte every 500 ms is timed out per HeartB
       THEN("the session times it out for missing heartbeats and disconnects") {
         INFO(pair.Events().Dump());
         REQUIRE((closed && pair.Events().Contains("Timed out waiting for heartbeat")));
+      }
+    }
+  }
+}
+
+SCENARIO("When the primary exchange host is unreachable the initiator reaches the backup in 5 s",
+         "[krx][v1][security][p1-12]") {
+  GIVEN("an exchange listening on its backup host only") {
+    const ListeningAcceptor exchange("KRXFO311");
+    WHEN("the gateway's initiator starts with a primary host that drops every packet") {
+      const auto started = std::chrono::steady_clock::now();
+      const FailoverInitiator gateway("KRXFO311", exchange.Port());
+      const bool reached = exchange.Events().WaitFor("Accepted connection from", kWait);
+      const auto took = std::chrono::steady_clock::now() - started;
+      THEN("it tried the primary first and reached the backup within 5 seconds") {
+        INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+             << " ms; gateway events:\n"
+             << gateway.Events().Dump());
+        REQUIRE((gateway.Events().Contains(std::string("Connecting to ") + kUnreachableHost) &&
+                 reached && took < std::chrono::seconds(5)));
       }
     }
   }

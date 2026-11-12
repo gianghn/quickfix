@@ -91,6 +91,18 @@ bool waitWritable( socket_handle s, std::chrono::steady_clock::time_point deadli
   return left > 0 && poll( &pfd, 1, left ) != 0;
 }
 
+// KRX fork (P1-12): true once the non-blocking connect on `s` has succeeded within `timeoutMs`.
+// A timeout or a signal fails this attempt; the initiator tries again (with the next host).
+bool waitConnected( socket_handle s, int timeoutMs )
+{
+  pollfd pfd{ s, POLLOUT, 0 };
+  if ( poll( &pfd, 1, timeoutMs ) <= 0 ) return false;
+  int error = 0;
+  socklen_t size = sizeof( error );
+  getsockopt( s, SOL_SOCKET, SO_ERROR, &error, &size );
+  return error == 0;
+}
+
 // KRX fork (P0-3): keepalive, and the kernel drops the connection once sent data has gone
 // unacknowledged for two heartbeat intervals, so a dead peer is found even while we send. 0 while
 // the heartbeat interval is unknown: the system default.
@@ -162,7 +174,18 @@ bool ThreadedSocketConnection::connect()
   if ( !m_sourceAddress.empty() || m_sourcePort )
     socket_bind( m_socket, m_sourceAddress.c_str(), m_sourcePort );
 
+#ifdef _MSC_VER
   return socket_connect(getSocket(), m_address.c_str(), m_port) >= 0;
+#else
+  // KRX fork (P1-12): a blocking connect to a host that drops packets waited for the kernel (75 s
+  // on macOS, 127 s on Linux) before the initiator could try the next host; now at most 2 s. The
+  // socket stays non-blocking, as the first send makes it anyway (P0-3).
+  socket_setnonblock( m_socket );
+  errno = 0;
+  if ( socket_connect( getSocket(), m_address.c_str(), m_port ) < 0 && errno != EINPROGRESS )
+    return false;
+  return waitConnected( m_socket, 2000 );
+#endif
 }
 
 void ThreadedSocketConnection::disconnect()
