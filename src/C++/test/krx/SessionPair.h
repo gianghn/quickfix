@@ -104,24 +104,80 @@ class LogonWatcher : public FIX::Application {
   std::atomic<bool> throw_from_admin_{false};
 };
 
+// A MemoryStore whose next sender seqnum write can be made to fail once, as FileStore's does when
+// its seqnums file cannot be written: the seqnum moves in memory, then the write throws.
+class SeqNumFailingStore : public FIX::MessageStore {
+ public:
+  explicit SeqNumFailingStore(const FIX::UtcTimeStamp& now) : store_(now) {}
+
+  // The next incrNextSenderMsgSeqNum fails, once.
+  void FailNextSenderSeqNumWrite() { fail_.store(true); }
+
+  bool set(int seq_num, const std::string& message) override {
+    return store_.set(seq_num, message);
+  }
+
+  void get(int begin, int end, std::vector<std::string>& messages) const override {
+    store_.get(begin, end, messages);
+  }
+
+  [[nodiscard]] int getNextSenderMsgSeqNum() const override {
+    return store_.getNextSenderMsgSeqNum();
+  }
+
+  [[nodiscard]] int getNextTargetMsgSeqNum() const override {
+    return store_.getNextTargetMsgSeqNum();
+  }
+
+  void setNextSenderMsgSeqNum(int value) override { store_.setNextSenderMsgSeqNum(value); }
+
+  void setNextTargetMsgSeqNum(int value) override { store_.setNextTargetMsgSeqNum(value); }
+
+  void incrNextSenderMsgSeqNum() override {
+    store_.incrNextSenderMsgSeqNum();
+    if (fail_.exchange(false)) {
+      throw FIX::IOException("seqnums file could not be written (test)");
+    }
+  }
+
+  void incrNextTargetMsgSeqNum() override { store_.incrNextTargetMsgSeqNum(); }
+
+  [[nodiscard]] FIX::UtcTimeStamp getCreationTime() const override {
+    return store_.getCreationTime();
+  }
+
+  void reset(const FIX::UtcTimeStamp& now) override { store_.reset(now); }
+
+  void refresh() override { store_.refresh(); }
+
+ private:
+  FIX::MemoryStore store_;
+  std::atomic<bool> fail_{false};
+};
+
 // Keeps the one store it creates, so a test can seed it before the session runs: a MemoryStore, or
 // a FileStore in `file_dir` when that is not empty (syncing to disk when `sync`).
 class KeptStoreFactory : public FIX::MemoryStoreFactory {
  public:
-  explicit KeptStoreFactory(std::string file_dir = "", bool sync = false)
-      : file_dir_(std::move(file_dir)), sync_(sync) {}
+  explicit KeptStoreFactory(std::string file_dir = "", bool sync = false, bool seqnum_fails = false)
+      : file_dir_(std::move(file_dir)), sync_(sync), seqnum_fails_(seqnum_fails) {}
 
   [[nodiscard]] FIX::MessageStore* Store() const { return store_; }
 
   FIX::MessageStore* create(const FIX::UtcTimeStamp& now, const FIX::SessionID& id) override {
-    store_ = file_dir_.empty() ? FIX::MemoryStoreFactory::create(now, id)
-                               : FIX::FileStoreFactory(file_dir_, sync_).create(now, id);
+    if (seqnum_fails_) {
+      store_ = std::make_unique<SeqNumFailingStore>(now).release();
+    } else {
+      store_ = file_dir_.empty() ? FIX::MemoryStoreFactory::create(now, id)
+                                 : FIX::FileStoreFactory(file_dir_, sync_).create(now, id);
+    }
     return store_;
   }
 
  private:
   std::string file_dir_;
   bool sync_;
+  bool seqnum_fails_;
   FIX::MessageStore* store_{nullptr};
 };
 
@@ -134,6 +190,7 @@ struct PairOptions {
   bool tcp{false};              // a loopback TCP pair instead of a socketpair (for TCP options)
   std::string file_store_dir;   // a FileStore in this directory instead of a MemoryStore
   bool file_store_sync{false};  // that FileStore syncs to disk (FileStoreSync=Y)
+  bool seqnum_fails{false};     // a SeqNumFailingStore (no FileStore)
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.

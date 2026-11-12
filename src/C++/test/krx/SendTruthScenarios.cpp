@@ -2,8 +2,12 @@
 // Rows 5.1 and 5.2 (P0-6, Q2): send() returns false when the order was not written to the
 // exchange: before Logon, or when the socket write fails. (It may still be stored: a resend can
 // send it later as a possible duplicate, which the gateway refuses in toApp.)
+// Row 5.3 (P0-6): when the store keeps an order but cannot write its seqnum, the seqnum is not
+// consumed: the next message reuses it and replaces the stored copy, so a resend cannot send the
+// failed order.
 #include <chrono>
 #include <string>
+#include <vector>
 
 #include <catch_amalgamated.hpp>
 
@@ -22,14 +26,21 @@ void LogOn(krx::SessionPair& pair) {
 }
 
 // An order from the gateway (a BusinessMessageReject stands in for it) with `text_size` bytes of
-// Text.
-FIX::Message Order(std::size_t text_size = 50) {
+// Text, all `fill`.
+FIX::Message Order(std::size_t text_size = 50, char fill = 'o') {
   FIX::Message order;
   order.getHeader().setField(FIX::MsgType("j"));
   order.setField(FIX::RefMsgType("D"));
   order.setField(FIX::BusinessRejectReason(0));
-  order.setField(FIX::Text(std::string(text_size, 'o')));
+  order.setField(FIX::Text(std::string(text_size, fill)));
   return order;
+}
+
+// What the store keeps under `seq_num`, or "<missing>".
+std::string Stored(const FIX::MessageStore* store, int seq_num) {
+  std::vector<std::string> messages;
+  store->get(seq_num, seq_num, messages);
+  return messages.empty() ? "<missing>" : messages.front();
 }
 
 }  // namespace
@@ -57,6 +68,30 @@ SCENARIO("An order whose socket write fails reports not sent", "[krx][v1][p0-6]"
       THEN("send reports that it was not sent") {
         INFO(pair.Events().Dump());
         REQUIRE_FALSE(sent);
+      }
+    }
+  }
+}
+
+SCENARIO(
+    "A store failure while persisting an order leaves no stored copy that a retry would "
+    "duplicate",
+    "[krx][v1][p0-6]") {
+  GIVEN("a logged-on session whose store will keep the next order but fail to write its seqnum") {
+    krx::PairOptions options;
+    options.seqnum_fails = true;
+    krx::SessionPair pair("KRXST53", options);
+    LogOn(pair);
+    FIX::MessageStore* store = pair.Store();
+    const int seq_num = store->getNextSenderMsgSeqNum();
+    dynamic_cast<krx::SeqNumFailingStore&>(*store).FailNextSenderSeqNumWrite();
+    WHEN("the gateway sends order A, then, with the store working again, order B") {
+      const bool sent_a = pair.Send(Order(50, 'A'));
+      pair.Send(Order(50, 'B'));
+      THEN("A reports not sent, and B took A's seqnum, so the store's copy is B") {
+        const std::string kept = Stored(store, seq_num);
+        INFO("seqnum " << seq_num << " holds: " << kept);
+        REQUIRE((!sent_a && kept.contains("58=" + std::string(50, 'B'))));
       }
     }
   }

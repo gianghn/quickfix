@@ -786,7 +786,26 @@ EXCEPT ( IOException )
   auto const & msgSeqNum = message.getHeader().getField<MsgSeqNum>();
   if( m_persistMessages )
     m_state.set( msgSeqNum, messageString );
-  m_state.incrNextSenderMsgSeqNum();
+  try
+  {
+    m_state.incrNextSenderMsgSeqNum();
+  }
+  catch ( IOException& )
+  {
+    // KRX fork (P0-6): the message is stored but its seqnum was not written. Put the seqnum back:
+    // the next message reuses it and replaces the stored copy of this one, which was never sent,
+    // so a resend cannot send it. (A store sets the seqnum in memory before it writes it.)
+    try
+    {
+      m_state.setNextSenderMsgSeqNum( msgSeqNum.getValue() );
+    }
+    catch ( IOException& e )
+    {
+      const std::string event = std::string( "Seqnum put back in memory only: " ) + e.what();
+      m_state.onEvent( event );
+    }
+    throw;
+  }
 }
 
 void Session::generateLogon()
