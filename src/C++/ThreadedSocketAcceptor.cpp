@@ -29,6 +29,35 @@
 
 namespace FIX
 {
+// KRX fork (P1-4): whether the accept loop goes on after accept failed with `error`: at once after
+// a signal or a connection reset before it was accepted, after 100 ms when out of descriptors or
+// memory (the pending connection waits in the backlog), never otherwise (the socket was closed).
+namespace
+{
+bool acceptAgain( int error )
+{
+#ifdef _MSC_VER
+  (void)error;
+  return false;
+#else
+  switch ( error )
+  {
+  case EINTR:
+  case ECONNABORTED:
+    return true;
+  case EMFILE:
+  case ENFILE:
+  case ENOBUFS:
+  case ENOMEM:
+    process_sleep( 0.1 );
+    return true;
+  default:
+    return false;
+  }
+#endif
+}
+}
+
 ThreadedSocketAcceptor::ThreadedSocketAcceptor(
   Application& application,
   MessageStoreFactory& factory,
@@ -207,8 +236,24 @@ THREAD_PROC ThreadedSocketAcceptor::socketAcceptorThread( void* p )
   socket_getsockopt( s, SO_RCVBUF, rcvBufSize );
 
   socket_handle socket = 0;
-  while ( ( !pAcceptor->isStopped() && ( socket = socket_accept( s ) ) != INVALID_SOCKET_HANDLE ) )
+  while ( !pAcceptor->isStopped() )
   {
+    socket = socket_accept( s );
+    if ( socket == INVALID_SOCKET_HANDLE )
+    {
+      // KRX fork (P1-4): a failed accept used to end this thread, so the port stopped accepting.
+      int error = errno;  // not const: error_strerror takes decltype(errno), an int&
+      if ( pAcceptor->isStopped() ) break;
+      {
+        const Locker l( pAcceptor->m_mutex );
+        const std::string event = "Accept failed on port " + IntConvertor::convert( port ) + ": " + error_strerror( error );
+        if( pAcceptor->getLog() )
+          pAcceptor->getLog()->onEvent( event );
+      }
+      if ( !acceptAgain( error ) ) break;
+      continue;
+    }
+
     if( noDelay )
       socket_setsockopt( socket, TCP_NODELAY );
     if( sendBufSize )
