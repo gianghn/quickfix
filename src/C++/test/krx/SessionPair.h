@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "Application.h"
+#include "FileStore.h"
 #include "Log.h"
 #include "Message.h"
 #include "MessageStore.h"
@@ -103,17 +104,22 @@ class LogonWatcher : public FIX::Application {
   std::atomic<bool> throw_from_admin_{false};
 };
 
-// Keeps the one MemoryStore it creates, so a test can seed it before the session runs.
+// Keeps the one store it creates, so a test can seed it before the session runs: a MemoryStore, or
+// a FileStore in `file_dir` when that is not empty.
 class KeptStoreFactory : public FIX::MemoryStoreFactory {
  public:
+  explicit KeptStoreFactory(std::string file_dir = "") : file_dir_(std::move(file_dir)) {}
+
   [[nodiscard]] FIX::MessageStore* Store() const { return store_; }
 
   FIX::MessageStore* create(const FIX::UtcTimeStamp& now, const FIX::SessionID& id) override {
-    store_ = FIX::MemoryStoreFactory::create(now, id);
+    store_ = file_dir_.empty() ? FIX::MemoryStoreFactory::create(now, id)
+                               : FIX::FileStoreFactory(file_dir_).create(now, id);
     return store_;
   }
 
  private:
+  std::string file_dir_;
   FIX::MessageStore* store_{nullptr};
 };
 
@@ -122,8 +128,9 @@ class KeptStoreFactory : public FIX::MemoryStoreFactory {
 struct PairOptions {
   bool preserve_field_order{false};
   std::map<int, std::string> stored_messages;
-  int send_timeout_ms{0};  // 0: the session's default
-  bool tcp{false};         // a loopback TCP pair instead of a socketpair (for TCP options)
+  int send_timeout_ms{0};      // 0: the session's default
+  bool tcp{false};             // a loopback TCP pair instead of a socketpair (for TCP options)
+  std::string file_store_dir;  // a FileStore in this directory instead of a MemoryStore
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
