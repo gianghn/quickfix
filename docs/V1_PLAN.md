@@ -169,7 +169,7 @@ Nothing else can be TDD'd until this exists.
 
 - 6.1 P0-11: `setResponder` takes `m_mutex`; all connection teardown goes through `Session::disconnect()`, which also clears `sentLogon` (`Session.h:238-245`, `ThreadedSocketConnection.cpp:65-75`).
 - 6.2 P0-11: `m_disconnect` becomes `std::atomic<bool>`.
-- 6.3 P1-1: cherry-pick #772 (`std::recursive_mutex`), #773, #774, #781 as one set, reviewed together (`Mutex.h`, `SessionState.h:58-150`). *#772 came in early, in Phase 3 (12 Nov 2026): item 3.3's cross-thread `disconnect()` cannot pass TSan with the old mutex. #773, #774 and #781 stay here.*
+- 6.3 P1-1: cherry-pick #772 (`std::recursive_mutex`), #773, #774, #781 as one set, reviewed together (`Mutex.h`, `SessionState.h:58-150`). *Done early, in Phase 3 (12 Nov 2026): item 3.3's cross-thread `disconnect()` cannot pass TSan without them. #772 in #28; #773, #774 (simplified: no range checks before 1970 or after 2262) and #781 in the next PR. Row 6.3, the threaded acceptance suite under TSan, is still checked in Phase 6.*
 - 6.4 P1-2: call `onLogout` after releasing `m_mutex`; document which callbacks still run under the lock (`Session.cpp:581-688`).
 - 6.5 P1-7: test-for, then cherry-pick #740 (`onStop` after `thread_join`); check it against fork fix `5d85a415` (`Acceptor.cpp:248-250`).
 - 6.6 P2-3: `setSession` failure unregisters; `onStop` spin sleeps between checks (`ThreadedSocketConnection.cpp:222-234`, `ThreadedSocketAcceptor.cpp:141-152`).
