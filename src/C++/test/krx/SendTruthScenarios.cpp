@@ -5,6 +5,8 @@
 // Row 5.3 (P0-6): when the store keeps an order but cannot write its seqnum, the seqnum is not
 // consumed: the next message reuses it and replaces the stored copy, so a resend cannot send the
 // failed order.
+// Row 5.4 (P0-8, Q3): every Reject (35=3) and BusinessMessageReject (35=j) the session sends is
+// logged as an error with the refused message's seqnum and the reason, for the gateway to alert.
 #include <chrono>
 #include <string>
 #include <vector>
@@ -68,6 +70,45 @@ SCENARIO("An order whose socket write fails reports not sent", "[krx][v1][p0-6]"
       THEN("send reports that it was not sent") {
         INFO(pair.Events().Dump());
         REQUIRE_FALSE(sent);
+      }
+    }
+  }
+}
+
+SCENARIO("Every outbound Reject is logged at error level with its seqnum and reason",
+         "[krx][v1][p0-8]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRJ54");
+    LogOn(pair);
+    WHEN("the exchange sends a ResendRequest from 0, which the session rejects") {
+      FIX::Message request;
+      request.getHeader().setField(FIX::MsgType("2"));
+      request.setField(FIX::BeginSeqNo(0));
+      request.setField(FIX::EndSeqNo(0));
+      pair.Write(pair.FromCounterparty(request, 2));
+      const bool rejected = krx::MsgTypeOf(pair.ReadFrame(kWait)) == "3";
+      THEN("an error names the Reject, the refused seqnum and the reason") {
+        INFO(pair.Events().Dump());
+        REQUIRE((rejected && pair.Events().Contains(
+                                 "ERROR: sent Reject (35=3) for RefSeqNum 2: Value is incorrect")));
+      }
+    }
+  }
+}
+
+SCENARIO("Every outbound BusinessMessageReject is logged at error level with its seqnum and reason",
+         "[krx][v1][p0-8]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRJ54B");
+    LogOn(pair);
+    WHEN("a BusinessMessageReject for message 7 goes out") {
+      FIX::Message reject = Order(10, 'r');
+      reject.setField(FIX::RefSeqNum(7));
+      pair.Send(reject);
+      THEN("an error names the BusinessMessageReject, the refused seqnum and the reason") {
+        INFO(pair.Events().Dump());
+        REQUIRE(pair.Events().Contains(
+            "ERROR: sent BusinessMessageReject (35=j) for RefSeqNum 7: rrrrrrrrrr"));
       }
     }
   }
