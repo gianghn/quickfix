@@ -155,6 +155,9 @@ class SessionPair {
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
 
+  // The gateway disconnects the session, as on stop() or a risk limit.
+  void Disconnect() { session_.disconnect(); }
+
   // The session's end of the connection.
   [[nodiscard]] FIX::socket_handle SessionSocket() const { return connection_->getSocket(); }
 

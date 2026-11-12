@@ -29,6 +29,7 @@
 #include "Parser.h"
 #include "Responder.h"
 #include "SessionID.h"
+#include <atomic>
 #include <set>
 #include <map>
 
@@ -77,7 +78,8 @@ private:
   Parser m_parser;
   Sessions m_sessions;
   Session* m_pSession;
-  bool m_disconnect;
+  // KRX fork (P0-3): set by disconnect() from any thread, read by the reading thread.
+  std::atomic<bool> m_disconnect;
   // KRX fork (P0-3): the socket is set up on the first send, after any connect() and once the
   // heartbeat interval is known: non-blocking (a send can time out), keepalive, user timeout.
   bool m_socketConfigured{ false };
