@@ -31,6 +31,16 @@
 
 namespace FIX {
 
+int64_t DateTime::toEpochNanos() const
+{
+  return ( ( m_date - JULIAN_19700101 ) * NANOS_PER_DAY ) + m_time;
+}
+
+DateTime DateTime::fromEpochNanos( int64_t nanos )
+{
+  return { static_cast<int>( JULIAN_19700101 + ( nanos / NANOS_PER_DAY ) ), nanos % NANOS_PER_DAY };
+}
+
 DateTime DateTime::nowUtc()
 {
 #if defined( _POSIX_SOURCE ) || defined(HAVE_GETTIMEOFDAY)

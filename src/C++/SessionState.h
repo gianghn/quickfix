@@ -31,6 +31,9 @@
 #include "Log.h"
 #include "Mutex.h"
 
+#include <atomic>
+#include <cstdint>
+
 namespace FIX
 {
 /// Maintains all of state for the Session class.
@@ -50,22 +53,24 @@ public:
   m_logonTimeout( 10 ), 
   m_logoutTimeout( 2 ), 
   m_testRequest( 0 ),
-  m_lastSentTime( now ),
+  m_lastSentTime( now.toEpochNanos() ),
   m_lastReceivedTime( now ),
   m_pStore( 0 ), 
   m_pLog( 0 ) {}
 
-  bool enabled() const { return m_enabled; }
-  void enabled( bool value ) { m_enabled = value; }
+  // KRX fork (P1-1, ports of quickfix/quickfix#773 and #781): flags the reading thread checks
+  // without the session lock while another thread changes them under it are atomic.
+  bool enabled() const { return m_enabled.load(); }
+  void enabled( bool value ) { m_enabled.store( value ); }
 
-  bool receivedLogon() const { return m_receivedLogon; }
-  void receivedLogon( bool value ) { m_receivedLogon = value; }
+  bool receivedLogon() const { return m_receivedLogon.load(); }
+  void receivedLogon( bool value ) { m_receivedLogon.store( value ); }
 
-  bool sentLogout() const { return m_sentLogout; }
-  void sentLogout( bool value ) { m_sentLogout = value; }
+  bool sentLogout() const { return m_sentLogout.load(); }
+  void sentLogout( bool value ) { m_sentLogout.store( value ); }
 
-  bool sentLogon() const { return m_sentLogon; }
-  void sentLogon( bool value ) { m_sentLogon = value; }
+  bool sentLogon() const { return m_sentLogon.load(); }
+  void sentLogon( bool value ) { m_sentLogon.store( value ); }
 
   bool receivedReset() const { return m_receivedReset; }
   void receivedReset( bool value ) { m_receivedReset = value; }
@@ -106,12 +111,12 @@ public:
   const HeartBtInt& heartBtInt() const
   { return m_heartBtInt; }
 
+  // KRX fork (P1-1, port of quickfix/quickfix#774): one atomic value, so a sender setting it and
+  // the reading thread's heartbeat check never see half a timestamp. The getter is a snapshot.
   void lastSentTime( const UtcTimeStamp& value )
-  { m_lastSentTime = value; }
-  UtcTimeStamp& lastSentTime()
-  { return m_lastSentTime; }
-  const UtcTimeStamp& lastSentTime() const
-  { return m_lastSentTime; }
+  { m_lastSentTime.store( value.toEpochNanos(), std::memory_order_relaxed ); }
+  UtcTimeStamp lastSentTime() const
+  { return { DateTime::fromEpochNanos( m_lastSentTime.load( std::memory_order_relaxed ) ) }; }
 
   void lastReceivedTime( const UtcTimeStamp& value )
   { m_lastReceivedTime = value; }
@@ -207,10 +212,10 @@ public:
   { if ( !m_pLog ) return ; Locker l( m_mutex ); m_pLog->onEvent( string ); }
 
 private:
-  bool m_enabled;
-  bool m_receivedLogon;
-  bool m_sentLogout;
-  bool m_sentLogon;
+  std::atomic<bool> m_enabled;
+  std::atomic<bool> m_receivedLogon;
+  std::atomic<bool> m_sentLogout;
+  std::atomic<bool> m_sentLogon;
   bool m_sentReset;
   bool m_receivedReset;
   bool m_initiate;
@@ -219,7 +224,7 @@ private:
   int m_testRequest;
   ResendRange m_resendRange;
   HeartBtInt m_heartBtInt;
-  UtcTimeStamp m_lastSentTime;
+  std::atomic<int64_t> m_lastSentTime;
   UtcTimeStamp m_lastReceivedTime;
   std::string m_logoutReason;
   Messages m_queue;
