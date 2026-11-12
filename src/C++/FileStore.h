@@ -28,6 +28,7 @@
 
 #include "MessageStore.h"
 #include "SessionSettings.h"
+#include <cstdint>
 #include <fstream>
 #include <string>
 
@@ -112,6 +113,8 @@ private:
   bool readFromFile( int offset, int size, std::string& msg );
   void setSeqNum();
   void setSession();
+  // KRX fork (P0-4): undoes a failed set() and throws.
+  void rollBack( std::int64_t msgEnd, std::int64_t headerEnd, const std::string& error );
 
   bool get( int, std::string& ) const EXCEPT ( IOException );
 
