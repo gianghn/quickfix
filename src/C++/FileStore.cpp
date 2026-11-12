@@ -196,32 +196,52 @@ void FileStoreFactory::destroy( MessageStore* pStore )
 bool FileStore::set( int msgSeqNum, const std::string& msg )
 EXCEPT ( IOException )
 {
-  if ( fseek( m_msgFile, 0, SEEK_END ) ) 
+  if ( !m_msgFile || !m_headerFile )
+    throw IOException( "Store files are not open: " + m_msgFileName );
+  if ( fseek( m_msgFile, 0, SEEK_END ) )
     throw IOException( "Cannot seek to end of " + m_msgFileName );
-  if ( fseek( m_headerFile, 0, SEEK_END ) ) 
+  if ( fseek( m_headerFile, 0, SEEK_END ) )
     throw IOException( "Cannot seek to end of " + m_headerFileName );
 
   long offset = ftell( m_msgFile );
-  if ( offset < 0 ) 
+  if ( offset < 0 )
     throw IOException( "Unable to get file pointer position from " + m_msgFileName );
+  const auto headerEnd = ftell( m_headerFile );
+  if ( headerEnd < 0 )
+    throw IOException( "Unable to get file pointer position from " + m_headerFileName );
   std::size_t size = msg.size();
 
-  if ( fprintf( m_headerFile, "%d,%ld,%zu ", msgSeqNum, offset, size ) < 0 )
-    throw IOException( "Unable to write to file " + m_headerFileName );
-  std::pair<NumToOffset::iterator, bool> it = 
-    m_offsets.insert(NumToOffset::value_type(msgSeqNum, std::make_pair(offset, size)));
-  if (it.second == false)
-  {
-    it.first->second = std::make_pair(offset, size);
-  }
-  fwrite( msg.c_str(), sizeof( char ), msg.size(), m_msgFile );
-  if ( ferror( m_msgFile ) ) 
-    throw IOException( "Unable to write to file " + m_msgFileName );
-  if ( fflush( m_msgFile ) == EOF ) 
-    throw IOException( "Unable to flush file " + m_msgFileName );
-  if ( fflush( m_headerFile ) == EOF ) 
-    throw IOException( "Unable to flush file " + m_headerFileName );
+  // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each flushed;
+  // the message is in m_offsets only once both are on file. Any failure puts both files back.
+  if ( fwrite( msg.data(), sizeof( char ), size, m_msgFile ) != size || fflush( m_msgFile ) == EOF )
+    rollBack( offset, headerEnd, "Unable to write to file " + m_msgFileName );
+  const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
+    + std::to_string( size ) + " ";
+  if ( fwrite( record.data(), sizeof( char ), record.size(), m_headerFile ) != record.size()
+       || fflush( m_headerFile ) == EOF )
+    rollBack( offset, headerEnd, "Unable to write to file " + m_headerFileName );
+
+  m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
   return true;
+}
+
+// KRX fork (P0-4): cuts the body and header files back to `msgEnd` and `headerEnd` bytes and throws
+// `error`. Both are reopened, so neither a stream's error flag nor bytes left in its buffer outlive
+// the failure (closing may write those bytes; the cut removes them).
+void FileStore::rollBack( std::int64_t msgEnd, std::int64_t headerEnd, const std::string& error )
+{
+  fclose( m_msgFile );
+  fclose( m_headerFile );
+  bool restored = true;
+#ifndef _MSC_VER
+  restored = truncate( m_msgFileName.c_str(), msgEnd ) == 0
+    && truncate( m_headerFileName.c_str(), headerEnd ) == 0;
+#endif
+  m_msgFile = file_fopen( m_msgFileName.c_str(), "r+" );
+  m_headerFile = file_fopen( m_headerFileName.c_str(), "r+" );
+  if ( !restored || !m_msgFile || !m_headerFile )
+    throw IOException( error + "; the store could not be put back: " + error_strerror() );
+  throw IOException( error );
 }
 
 void FileStore::get( int begin, int end,
@@ -332,6 +352,8 @@ EXCEPT ( IOException )
 {
   NumToOffset::const_iterator find = m_offsets.find( msgSeqNum );
   if ( find == m_offsets.end() ) return false;
+  if ( !m_msgFile ) // KRX fork (P0-4): a failed roll back left the store closed
+    throw IOException( "Store files are not open: " + m_msgFileName );
   const OffsetSize& offset = find->second;
   if ( fseek( m_msgFile, offset.first, SEEK_SET ) ) 
     throw IOException( "Unable to seek in file " + m_msgFileName );
