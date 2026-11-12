@@ -28,7 +28,6 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
-#include <thread>
 
 namespace FIX
 {
@@ -464,8 +463,9 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
     {
       const ReverseLocker unlocked( m_mutex );
       const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
-      while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
-        std::this_thread::yield();
+      // A spin, not a yield: a waiting thread takes the free lock within microseconds, and a
+      // yield there would change nothing a test could see (owner, 12 Nov 2026).
+      while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until ) {}
     }
     if ( m_pResponder != responder ) return;
     appMessageJustSent = false;
