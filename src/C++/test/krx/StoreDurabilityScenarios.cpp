@@ -4,6 +4,7 @@
 // not there, and the store takes writes again once space returns.
 // Row 4.3 (P0-4, D7): a session whose store cannot write fails closed: the send fails, an error is
 // logged and the session disconnects.
+// Row 4.4 (P0-4): a restart loads only records whose message is whole in the body file.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -159,6 +160,54 @@ SCENARIO("A failed header write leaves neither the message nor its body behind",
         REQUIRE((failed && last == "<missing>" && Read(store, 1000050) == "x" &&
                  std::filesystem::file_size(BodyFile(dir)) == body_before &&
                  std::filesystem::file_size(HeaderFile(dir)) == header_before));
+      }
+    }
+  }
+}
+
+SCENARIO("A restart after a failed write loads only consistent records", "[krx][v1][p0-4]") {
+  GIVEN("a store that held messages 1 to 3 when the machine stopped with 3's body cut short") {
+    const krx::TempDir dir("store44");
+    {
+      FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      store.set(1, Message(1));
+      store.set(2, Message(2));
+      store.set(3, Message(3));
+    }
+    std::filesystem::resize_file(BodyFile(dir), std::filesystem::file_size(BodyFile(dir)) - 50);
+    WHEN("the store is opened again") {
+      const FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      std::vector<std::string> range;
+      bool range_failed = false;
+      try {
+        store.get(1, 3, range);
+      } catch (const FIX::IOException&) {
+        range_failed = true;
+      }
+      THEN("1 and 2 read back whole, 3 is not there, and reading 1 to 3 gives 1 and 2") {
+        const std::string three = Read(store, 3);
+        INFO("3: " << three << "; range read " << (range_failed ? "failed" : "worked") << ", "
+                   << range.size() << " messages");
+        REQUIRE((Read(store, 1) == Message(1) && Read(store, 2) == Message(2) &&
+                 three == "<missing>" && !range_failed && range.size() == 2));
+      }
+    }
+  }
+}
+
+SCENARIO("A store reopened after a clean stop keeps its one message", "[krx][v1][p0-4]") {
+  GIVEN("a store that held only message 1 (its body is the whole body file) and stopped cleanly") {
+    const krx::TempDir dir("store44b");
+    {
+      FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      store.set(1, Message(1));
+    }
+    WHEN("the store is opened again") {
+      const FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      THEN("message 1 reads back whole") {
+        const std::string one = Read(store, 1);
+        INFO("1: " << one);
+        REQUIRE((one == Message(1)));
       }
     }
   }
