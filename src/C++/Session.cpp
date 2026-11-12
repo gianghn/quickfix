@@ -712,7 +712,9 @@ void Session::disconnect()
     const Locker r( m_responderMutex );
     if ( m_pResponder )
     {
-      m_state.onEvent( "Disconnecting" );
+      // A named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+      const std::string event = "Disconnecting";
+      m_state.onEvent( event );
 
       if ( m_pResponder != shutDown ) m_pResponder->disconnect();
       m_pResponder = nullptr;
