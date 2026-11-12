@@ -27,7 +27,9 @@
 #include "SessionID.h"
 #include "Parser.h"
 #include "Utility.h"
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 namespace FIX
 {
@@ -135,10 +137,18 @@ void FileStore::populateCache()
     int num;
     long offset;
     std::size_t size;
+    // KRX fork (P0-4): a record whose message runs past the end of the body file (the machine
+    // stopped between the two writes, or the body file was cut short) is dropped, so a resend
+    // gap-fills that one message instead of failing on it. No body file: no message fits.
+    std::error_code noBody;
+    const std::uintmax_t found = std::filesystem::file_size( m_msgFileName, noBody );
+    const std::uintmax_t bodySize = noBody ? 0 : found;
 
     while (FILE_FSCANF(headerFile, "%d,%ld,%zu ", &num, &offset, &size) == 3)
     {
-      std::pair<NumToOffset::iterator, bool> it = 
+      if ( offset < 0 || size > bodySize || static_cast<std::uintmax_t>( offset ) > bodySize - size )
+        continue;
+      const std::pair<NumToOffset::iterator, bool> it =
         m_offsets.insert(NumToOffset::value_type(num, std::make_pair(offset, size)));
 
       if (it.second == false)
