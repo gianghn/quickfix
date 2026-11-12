@@ -214,7 +214,9 @@ bool ThreadedSocketConnection::read()
     if( m_pSession && now - m_lastTimerCheck >= std::chrono::seconds( 1 ) )
     {
       m_lastTimerCheck = now;
-      m_pSession->next( UtcTimeStamp::now() );
+      // A named time stamp: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+      const UtcTimeStamp timeStamp = UtcTimeStamp::now();
+      m_pSession->next( timeStamp );
     }
 
     processStream();
