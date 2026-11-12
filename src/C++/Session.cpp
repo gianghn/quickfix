@@ -671,7 +671,8 @@ bool Session::sendRaw( Message& message, int num )
         || msgType == MsgType_SequenceReset
         || isLoggedOn() )
       {
-        send( messageString );
+        // KRX fork (P0-6): a write that fails is reported, not passed off as sent.
+        if ( !send( messageString ) ) return false;
       }
     }
     else
@@ -688,8 +689,9 @@ bool Session::sendRaw( Message& message, int num )
         if( !num )
           persist( message, messageString );
 
-        if ( isLoggedOn() )
-          send( messageString );
+        // KRX fork (P0-6, Q2): false when the message was not written now: not logged on, or the
+        // write failed. It may be stored, and a resend can then send it as a possible duplicate.
+        if ( !isLoggedOn() || !send( messageString ) ) return false;
       }
       catch ( DoNotSend& ) { return false; }
     }
