@@ -213,13 +213,16 @@ EXCEPT ( IOException )
 
   // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each flushed;
   // the message is in m_offsets only once both are on file. Any failure puts both files back.
+  // Named error strings: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+  const std::string bodyError = "Unable to write to file " + m_msgFileName;
   if ( fwrite( msg.data(), sizeof( char ), size, m_msgFile ) != size || fflush( m_msgFile ) == EOF )
-    rollBack( offset, headerEnd, "Unable to write to file " + m_msgFileName );
+    rollBack( offset, headerEnd, bodyError );
   const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
     + std::to_string( size ) + " ";
+  const std::string headerError = "Unable to write to file " + m_headerFileName;
   if ( fwrite( record.data(), sizeof( char ), record.size(), m_headerFile ) != record.size()
        || fflush( m_headerFile ) == EOF )
-    rollBack( offset, headerEnd, "Unable to write to file " + m_headerFileName );
+    rollBack( offset, headerEnd, headerError );
 
   m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
   return true;

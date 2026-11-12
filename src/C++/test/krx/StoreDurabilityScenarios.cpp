@@ -46,12 +46,14 @@ std::string Read(const FIX::FileStore& store, int seq_num) {
 }
 
 // True when storing `message` as `seq_num` threw an IOException.
+// True when storing `message` as `seq_num` threw an IOException after putting the store back; an
+// error saying the store could not be put back counts as not failing cleanly (false).
 bool WriteFails(FIX::FileStore& store, int seq_num, const std::string& message) {
   try {
     store.set(seq_num, message);
     return false;
-  } catch (const FIX::IOException&) {
-    return true;
+  } catch (const FIX::IOException& e) {
+    return !std::string(e.what()).contains("could not be put back");
   }
 }
 
