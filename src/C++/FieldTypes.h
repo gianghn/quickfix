@@ -465,6 +465,11 @@ struct DateTime
   /// Return the current wall-clock time as a local DateTime
   static DateTime nowLocal();
 
+  /// KRX fork (P1-1, #774): nanoseconds since 1970-01-01 UTC, one value an atomic can hold.
+  [[nodiscard]] int64_t toEpochNanos() const;
+  /// KRX fork (P1-1, #774): the DateTime `nanos` after 1970-01-01 UTC (not before 1970).
+  [[nodiscard]] static DateTime fromEpochNanos( int64_t nanos );
+
   /// Convert a time_t and optional milliseconds to a DateTime
   static DateTime fromUtcTimeT( time_t t, int millis = 0 ) 
   {
