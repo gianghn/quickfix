@@ -72,7 +72,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 4.2 | After a failed write, the store accepts writes once space returns | 4.2 |
 | [x] 4.3 | A failed write stops order flow and disconnects the session with an error logged | 4.2 |
 | [x] 4.4 | A restart after a failed write loads only consistent records | 4.3 |
-| [ ] 4.5 | With store sync on, a stored message and its seqnum are on disk before `send()` returns | 4.4 |
+| [x] 4.5 | With store sync on, a stored message and its seqnum are on disk before `send()` returns | 4.4 |
 | [x] 4.6 | A message with an embedded NUL comes back from the store whole | 4.5 |
 
 ## 5. No silent loss — Phase 5 (src/C++/test/krx/SendTruthScenarios.cpp)
@@ -170,7 +170,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] U-6 | Echo-on chaos 20 runs with no hang; Release soak ≥ 8 h with LOST = DUP = OOO = 0 and flat RSS and fds | 8.5 |
 | [ ] U-7 | libFuzzer ≥ 24 CPU-h per mode and stateful session fuzzing 24 CPU-h, no crash | 8.6 |
 | [ ] U-8 | Shutdown under load: 100 iterations, each exits within 15 s | 8.7 |
-| [ ] U-9 | FileStore sync cost measured (p50/p99.9, on and off) | 4.4 |
+| [x] U-9 | FileStore sync cost measured (p50/p99.9, on and off): `test/krx/BASELINE.md` (a Mac; production disk in 11.7) | 4.4 |
 | [ ] U-10 | `cargo-mutants` on the quickfix-rs callback module: no surviving mutant on the panic path | 9.5 |
 | [ ] U-11 | Performance baseline on production-like hardware, 2× peak full-day soak, ATO/ATC burst replay | 11.7, 11.8 |
 | [ ] U-12 | Nightly p99.9 regression job ≤ 10 % | 11.8 |

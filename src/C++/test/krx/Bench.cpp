@@ -3,7 +3,8 @@
 //   throughput: one thread sends N orders; time until the acceptor's fromApp has seen all of them.
 //   ping-pong:  the acceptor echoes each order; round trip from the steady-clock nanoseconds the
 //               order carries in Text(58). Prints p50/p99/p99.9/max.
-// Usage: krx_bench [mem|file] [orders=200000] [round_trips=20000] [port=7800] [workdir]
+// Usage: krx_bench [mem|file|sync] [orders=200000] [round_trips=20000] [port=7800] [workdir]
+//   sync: the file store with FileStoreSync=Y (plan item 4.4).
 // Numbers from a shared machine are rough; compare runs on the same machine only.
 #include <algorithm>
 #include <atomic>
@@ -93,6 +94,7 @@ class BenchApp : public FIX::Application {
 
 struct Options {
   bool file_store = false;
+  bool sync = false;
   std::int64_t orders = 200000;
   std::int64_t round_trips = 20000;
   int port = 7800;
@@ -102,7 +104,9 @@ struct Options {
 Options Parse(std::span<char*> args) {
   Options options;
   if (args.size() > 1) {
-    options.file_store = std::string(args[1]) == "file";
+    const std::string store = args[1];
+    options.sync = store == "sync";
+    options.file_store = store == "file" || options.sync;
   }
   if (args.size() > 2) {
     options.orders = std::stoll(args[2]);
@@ -126,7 +130,7 @@ FIX::SessionSettings Settings(const Options& options, bool acceptor) {
        << "\nSocketConnectHost=127.0.0.1\nSocketConnectPort=" << options.port
        << "\nSocketReuseAddress=Y\nSocketNodelay=Y\nHeartBtInt=30\nReconnectInterval=1\n"
        << "StartTime=00:00:00\nEndTime=00:00:00\nFileStorePath="
-       << (options.workdir / side).string()
+       << (options.workdir / side).string() << "\nFileStoreSync=" << (options.sync ? "Y" : "N")
        << "\nUseDataDictionary=Y\nDataDictionary=" << KRX_SPEC_DIR
        << "/FIX44.xml\n[SESSION]\nBeginString=FIX.4.4\nSenderCompID=" << (acceptor ? "SRV" : "CLI")
        << "\nTargetCompID=" << (acceptor ? "CLI" : "SRV") << "\n";
@@ -233,8 +237,11 @@ int Run(std::span<char*> args) {
   while (!initiator_app.LoggedOn()) {
     std::this_thread::sleep_for(kPollStep);
   }
-  std::cout << std::format("store={} hw_threads={}\n", options.file_store ? "file" : "mem",
-                           std::thread::hardware_concurrency());
+  std::string store = options.file_store ? "file" : "mem";
+  if (options.sync) {
+    store = "file+sync";
+  }
+  std::cout << std::format("store={} hw_threads={}\n", store, std::thread::hardware_concurrency());
   const FIX::SessionID id("FIX.4.4", "CLI", "SRV");
   for (std::int64_t number = 0; number < kWarmup; ++number) {
     Send(number, id);

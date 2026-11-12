@@ -84,6 +84,8 @@ const char LOGOUT_TIMEOUT[] = "LogoutTimeout";
 // KRX fork (P0-3): seconds one message may take to send; default half of HeartBtInt.
 constexpr const char* SEND_TIMEOUT = "SendTimeout";
 const char FILE_STORE_PATH[] = "FileStorePath";
+// KRX fork (P0-5): Y forces the store's files to disk before a send returns (default N).
+constexpr const char* FILE_STORE_SYNC = "FileStoreSync";
 const char MYSQL_STORE_USECONNECTIONPOOL[] = "MySQLStoreUseConnectionPool";
 const char MYSQL_STORE_DATABASE[] = "MySQLStoreDatabase";
 const char MYSQL_STORE_USER[] = "MySQLStoreUser";

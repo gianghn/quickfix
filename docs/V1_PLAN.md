@@ -90,7 +90,7 @@ The owner may change any of these before its phase starts.
 | 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | built, waiting for merge: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30) merged; 3.4 (#31), 3.6 (#32), 3.7 (#33, #34), row 3.2's test (#35) open; 3.8 (benchmark) later |
-| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | in progress: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39); 4.4 (sync, Q1) to do |
+| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | built, waiting for merge: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39), 4.4 (#40); the crash runbook (Q1) to write |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
@@ -104,7 +104,7 @@ The owner may change any of these before its phase starts.
 
 ### Next steps (12 Nov 2026)
 
-1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), each retargeted to `krx/main` and green first.
+1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), then the Phase 4 stack #36–#40 (Handover 4), each retargeted to `krx/main` and green first.
 2. ~~3.7 P1-12~~ done in #34 (row 3.11). The gateway needs a short `ReconnectInterval` (1–2 s) for a 5 s failover.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
@@ -328,3 +328,29 @@ had equivalent mutants). `ECONNABORTED` (3.8) has no test: it cannot be provoked
 **Left for the owner:** merge #31–#35 in order; the gateway needs `ReconnectInterval` 1–2 s for a
 5 s failover; the SSL acceptor and plain `SocketServer` keep the old accept loop (the gateway runs
 neither, and Q6 is no TLS); 3.8 (benchmark) when convenient.
+
+### Handover 4 — 12 Nov 2026
+
+**Built:** 4.1 and the store half of 4.2, a failed write leaves the store as it was (#36); the
+session half of 4.2, a store that cannot write disconnects the session (D7, #37); 4.3, a restart
+loads only records whose message is whole (#38); 4.5, embedded NULs come back (#39); 4.4,
+`FileStoreSync` (Q1, #40). Test helpers: `FaultyFile.h` (`RLIMIT_FSIZE` as a full disk, temp
+dirs), `PairOptions.file_store_dir` / `file_store_sync`.
+**Red → green:** rows 4.1–4.6 each red first, in their PRs (4.1: every read failed after a failed
+write; 4.3: still connected; 4.4: the range read failed; 4.5: 0 syncs with the stub; 4.6: 19 of 29
+bytes). Extra rows: a failed header write, a store with one message reopened (kills a boundary
+mutant, checked by hand), sync off, the setting.
+**Checks:** no `dod.json`; per PR: `krx_ut` (75/75 at #40) and `ut` 53/53 on macOS, `krx_ut` in
+`ubuntu:24.04`, `lint.sh .` passing; threaded FIX.4.4 acceptance 59/59 at #37. CI runs once
+the stack is retargeted to `krx/main`.
+**Measured:** the store change (#36): p99.9 +3.3 %, within the 10 % gate. `FileStoreSync=Y` on a
+Mac: 66,935 → 12,677 msg/s, RTT p99.9 118 → 372 µs (`test/krx/BASELINE.md`).
+**Decisions taken:** roll back by close, `truncate`, reopen; a dropped record on restart is not
+logged; sync is one sync point per message (three file syncs), `FileStoreSync` default N;
+`FileStore::getSyncCount()` added so a test (and operations) can see the syncs.
+**Away from the spec:** "group commit" across messages is not needed: sends are serialised by
+the session lock, so each message is its own commit; the three syncs per message are the cost.
+**Left for the owner:** the Q1 crash runbook (reconcile seqnums with HOSE after a crash) is not
+written: it needs HOSE's procedure, best in Phase 13 with operations. The sync cost on the
+production disk (11.7) decides whether `FileStoreSync=Y` goes live; if it is too slow, fewer syncs
+per message (one file for body, header and seqnums) is the next step.

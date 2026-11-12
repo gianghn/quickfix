@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <utility>
 
 namespace FIX
 {
@@ -44,12 +45,16 @@ public:
 : m_settings( settings ) {};
   FileStoreFactory( const std::string& path )
 : m_path( path ) {};
+  // KRX fork (P0-5): every store this factory makes syncs to disk when `sync`.
+  FileStoreFactory( std::string path, bool sync )
+: m_path( std::move( path ) ), m_sync( sync ) {}
 
   MessageStore* create( const UtcTimeStamp&, const SessionID& );
   void destroy( MessageStore* );
 private:
   std::string m_path;
   SessionSettings m_settings;
+  bool m_sync = false; // KRX fork (P0-5): with a path, every store syncs (with settings: FileStoreSync)
 };
 /*! @} */
 
@@ -82,8 +87,12 @@ private:
 class FileStore : public MessageStore
 {
 public:
-  FileStore( const UtcTimeStamp& now, std::string, const SessionID& sessionID );
+  FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync = false );
   virtual ~FileStore();
+
+  // KRX fork (P0-5): how many file syncs the store has done (FileStoreSync=Y); a sent message
+  // costs three (body, header, seqnums).
+  [[nodiscard]] std::uint64_t getSyncCount() const { return m_syncCount; }
 
   bool set( int, const std::string& ) EXCEPT ( IOException );
   void get( int, int, std::vector<std::string>& ) const EXCEPT ( IOException );
@@ -113,6 +122,9 @@ private:
   bool readFromFile( int offset, int size, std::string& msg );
   void setSeqNum();
   void setSession();
+  // KRX fork (P0-5): FileStoreSync; each throws IOException when a sync fails.
+  void syncToDisk();
+  void syncFile( FILE* file, const std::string& name );
   // KRX fork (P0-4): undoes a failed set() and throws.
   void rollBack( std::int64_t msgEnd, std::int64_t headerEnd, const std::string& error );
 
@@ -130,6 +142,12 @@ private:
   FILE* m_headerFile;
   FILE* m_seqNumsFile;
   FILE* m_sessionFile;
+
+  // KRX fork (P0-5): FileStoreSync. A set() leaves its message to be synced with the seqnums that
+  // follow it, so a sent message costs one sync point.
+  bool m_sync = false;
+  bool m_unsyncedMessages = false;
+  std::uint64_t m_syncCount = 0;
 };
 }
 
