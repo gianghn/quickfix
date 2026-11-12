@@ -79,11 +79,11 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 
 | # | Scenario | Plan |
 |---|---|---|
-| [ ] 5.1 | An order sent before Logon reports not sent | 5.1 |
-| [ ] 5.2 | An order whose socket write fails reports not sent | 5.1 |
+| [x] 5.1 | An order sent before Logon reports not sent | 5.1 |
+| [x] 5.2 | An order whose socket write fails reports not sent | 5.1 |
 | [ ] 5.3 | A store failure while persisting an order leaves no stored copy that a retry would duplicate | 5.2 |
 | [ ] 5.4 | Every outbound Reject or BusinessMessageReject is logged at error level with its seqnum and reason | 5.3 |
-| [ ] 5.5 | An execution report with an unknown tag reaches `fromApp` flagged as failed validation (only if Q3 picks the engine patch) | 5.4 |
+| n/a 5.5 | An execution report with an unknown tag reaches `fromApp` flagged as failed validation (only if Q3 picks the engine patch; Q3 chose the full dictionary plus alerts, 12 Nov 2026) | 5.4 |
 
 ## 6. Teardown and locking — Phase 6 (src/C++/test/krx/TeardownRaceScenarios.cpp)
 
