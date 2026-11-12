@@ -30,6 +30,7 @@
 #include "Responder.h"
 #include "SessionID.h"
 #include <atomic>
+#include <chrono>
 #include <set>
 #include <map>
 
@@ -83,6 +84,8 @@ private:
   // KRX fork (P0-3): the socket is set up on the first send, after any connect() and once the
   // heartbeat interval is known: non-blocking (a send can time out), keepalive, user timeout.
   bool m_socketConfigured{ false };
+  // KRX fork (P1-10): when read() last ran the session's timers (Session::next(now)).
+  std::chrono::steady_clock::time_point m_lastTimerCheck;
 #if _MSC_VER
   fd_set m_fds;
 #endif

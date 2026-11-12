@@ -199,10 +199,6 @@ bool ThreadedSocketConnection::read()
       if ( size <= 0 ) { throw SocketRecvFailed( size ); }
       m_parser.addToStream( m_buffer, size );
     }
-    else if( result == 0 && m_pSession ) // Timeout
-    {
-      m_pSession->next( UtcTimeStamp::now() );
-    }
     else if( result < 0 ) // Error
     {
 #ifndef _MSC_VER
@@ -210,6 +206,15 @@ bool ThreadedSocketConnection::read()
       if( errno == EINTR ) return true;
 #endif
       throw SocketRecvFailed( result );
+    }
+
+    // KRX fork (P1-10): the session's timers ran only when poll timed out, so a peer sending a
+    // byte every half second was never timed out. They now run once a second whatever arrives.
+    const auto now = std::chrono::steady_clock::now();
+    if( m_pSession && now - m_lastTimerCheck >= std::chrono::seconds( 1 ) )
+    {
+      m_lastTimerCheck = now;
+      m_pSession->next( UtcTimeStamp::now() );
     }
 
     processStream();

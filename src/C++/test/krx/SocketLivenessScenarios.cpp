@@ -11,11 +11,14 @@
 // error; the session stays logged on, idle or busy.
 // Rows 3.8 and 3.9 (P1-4): a failed accept is logged and the acceptor keeps taking connections:
 // at once after a signal, after a pause when it ran out of file descriptors.
+// Row 3.10 (P1-10): the session's timers run once a second even while bytes keep arriving, so a
+// peer trickling bytes is timed out.
 #include <pthread.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -576,6 +579,30 @@ SCENARIO("The acceptor backs off and recovers when it runs out of file descripto
       THEN("the failed accept is logged and a connection is accepted afterwards") {
         INFO(acceptor.Events().Dump());
         REQUIRE((reported && accepted));
+      }
+    }
+  }
+}
+
+SCENARIO("A counterparty trickling one byte every 500 ms is timed out per HeartBtInt",
+         "[krx][v1][security][p1-10]") {
+  GIVEN("a session whose counterparty logged on with HeartBtInt 1") {
+    krx::SessionPair pair("KRXTR310");
+    LogOn(pair, 1);
+    WHEN("the counterparty then sends nothing but one byte every 500 ms") {
+      std::atomic<bool> trickling{true};
+      std::thread trickle([&pair, &trickling] {
+        for (int i = 0; i < 20 && trickling.load(); ++i) {
+          pair.Write("x");
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+      });
+      const bool closed = pair.WaitClosed(std::chrono::seconds(8));
+      trickling.store(false);
+      trickle.join();
+      THEN("the session times it out for missing heartbeats and disconnects") {
+        INFO(pair.Events().Dump());
+        REQUIRE((closed && pair.Events().Contains("Timed out waiting for heartbeat")));
       }
     }
   }
