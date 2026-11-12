@@ -378,7 +378,7 @@ EXCEPT ( IOException )
     throw IOException( "Unable to read from file " + m_msgFileName );
   }
   buffer[ offset.second ] = 0;
-  msg = buffer;
+  msg.assign( buffer, offset.second ); // KRX fork (P2-4): keeps embedded NULs
   delete [] buffer;
   return true;
 }
