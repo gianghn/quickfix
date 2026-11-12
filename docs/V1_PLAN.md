@@ -91,7 +91,7 @@ The owner may change any of these before its phase starts.
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | built, waiting for merge: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30) merged; 3.4 (#31), 3.6 (#32), 3.7 (#33, #34), row 3.2's test (#35) open; 3.8 (benchmark) later |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | built, waiting for merge: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39), 4.4 (#40, option B #41); the crash runbook (Q1) to write |
-| 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | in progress: 5.1 (#42), 5.2 (#43); 5.3 to do; 5.4 not needed (Q3) |
+| 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | built, waiting for merge: 5.1 (#42), 5.2 (#43), 5.3 (#44); 5.4 not needed (Q3) |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
@@ -104,7 +104,7 @@ The owner may change any of these before its phase starts.
 
 ### Next steps (12 Nov 2026)
 
-1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), then the Phase 4 stack #36–#40 (Handover 4), each retargeted to `krx/main` and green first.
+1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), then the Phase 4 stack #36–#41 (Handover 4) and the Phase 5 stack #42–#44 (Handover 5), each retargeted to `krx/main` and green first.
 2. ~~3.7 P1-12~~ done in #34 (row 3.11). The gateway needs a short `ReconnectInterval` (1–2 s) for a 5 s failover.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
@@ -360,3 +360,23 @@ ExecID (Phase 10).
 written: it needs HOSE's procedure, best in Phase 13 with operations. The sync cost on the
 production disk (11.7) decides whether `FileStoreSync=Y` goes live; option C (sync every N ms, a
 setting) is the step after B if it is still too slow.
+
+### Handover 5 — 12 Nov 2026
+
+**Built:** 5.1 `send()` returns `false` when the order was not written: before Logon, or a write
+that fails (Q2, #42); 5.2 a seqnum write that fails after the order was stored puts the seqnum
+back, so the stored copy is replaced and never resent (#43); 5.3 every outgoing Reject and
+BusinessMessageReject is logged as `ERROR: sent <type> for RefSeqNum <n>: <reason>` (Q3, #44).
+5.4 not built: Q3 chose the full dictionary plus alerts. Test fixture: `SeqNumFailingStore`.
+**Red → green:** rows 5.1–5.4 each red first, in their PRs (5.1, 5.2: `true`; 5.3: the stored copy
+was the failed order; 5.4: no error event). Extra row: an outgoing 35=j is logged too.
+**Checks:** no `dod.json`; per PR: `krx_ut` (84/84 at #44) and `ut` 53/53 on macOS, `krx_ut` in
+`ubuntu:24.04`, FIX.4.4 acceptance 59/59 plain and threaded, `lint.sh .` passing. CI runs once
+the stack is retargeted to `krx/main`.
+**Decisions taken:** admin messages also report a failed write; a 35=j the gateway itself sends is
+logged as an error too ("every outbound", row 5.4); the error is one event with a fixed prefix,
+`ERROR: sent`, since `FIX::Log` has no levels.
+**Away from the spec:** "count every outbound 35=3 and 35=j" is the log event, not a counter.
+**Left for the owner and the gateway (Phase 10):** the gateway refuses PossDup orders in `toApp`
+(Q2), drops duplicate ExecIDs (option B), alerts on `ERROR: sent` events (Q3), and its
+dictionary covers `FIX44KRX.xml` (Q3).

@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <string_view>
 #include <thread>
 
 namespace FIX
@@ -623,6 +624,30 @@ bool Session::send( Message& message )
   return sendRaw( message );
 }
 
+namespace
+{
+constexpr std::string_view rejectType = "3";         // MsgType_Reject
+constexpr std::string_view businessRejectType = "j"; // MsgType_BusinessMessageReject
+
+// KRX fork (P0-8): true for a Reject or a BusinessMessageReject.
+bool isReject( const MsgType& msgType )
+{
+  return msgType.getValue() == rejectType || msgType.getValue() == businessRejectType;
+}
+
+// KRX fork (P0-8): "ERROR: sent Reject (35=3) for RefSeqNum 5: <Text>", or the same for a
+// BusinessMessageReject (35=j); "?" when RefSeqNum or Text is missing.
+std::string rejectSentEvent( const Message& reject, const MsgType& msgType )
+{
+  const std::string type = msgType.getValue() == rejectType ? "Reject (35=3)" : "BusinessMessageReject (35=j)";
+  RefSeqNum refSeqNum;
+  Text text;
+  const std::string refused = reject.getFieldIfSet( refSeqNum ) ? refSeqNum.getString() : "?";
+  const std::string reason = reject.getFieldIfSet( text ) ? text.getString() : "?";
+  return "ERROR: sent " + type + " for RefSeqNum " + refused + ": " + reason;
+}
+}
+
 bool Session::sendRaw( Message& message, int num )
 {
   ++m_mutexWaiters;  // KRX fork (P0-3): a long resend lets us in (generateRetransmits)
@@ -641,6 +666,14 @@ bool Session::sendRaw( Message& message, int num )
 
     if ( num )
       header.setField( MsgSeqNum( num ) );
+
+    // KRX fork (P0-8, Q3): a Reject or BusinessMessageReject going out means a message of the
+    // counterparty's was refused (or the gateway refused one): an error the gateway alerts on.
+    if ( isReject( msgType ) )
+    {
+      const std::string event = rejectSentEvent( message, msgType );
+      m_state.onEvent( event );
+    }
 
     if ( Message::isAdminMsgType( msgType ) )
     {
