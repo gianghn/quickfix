@@ -89,7 +89,7 @@ The owner may change any of these before its phase starts.
 |---|---|---|---|---|
 | 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
-| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | in progress: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30), 3.4 (#31); 3.6, 3.7 to do |
+| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | in progress: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30), 3.4 (#31), 3.6 (#32); 3.7 to do |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | not started |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |

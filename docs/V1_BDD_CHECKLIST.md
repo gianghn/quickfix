@@ -56,8 +56,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 3.5 | A sender can place an order while a large resend is in progress | 3.4 |
 | [x] 3.6 | A signal storm on an idle session causes no disconnect | 3.5 |
 | [x] 3.7 | A signal storm on a busy session causes no disconnect | 3.5 |
-| [ ] 3.8 | The acceptor keeps taking connections after an interrupted or aborted accept | 3.6 |
-| [ ] 3.9 | The acceptor backs off and recovers when it runs out of file descriptors | 3.6 |
+| [x] 3.8 | The acceptor keeps taking connections after an interrupted or aborted accept | 3.6 |
+| [x] 3.9 | The acceptor backs off and recovers when it runs out of file descriptors | 3.6 |
 | [ ] 3.10 | A peer trickling one byte every 500 ms is timed out per HeartBtInt | 3.7 |
 | [ ] 3.11 | When the primary exchange host is unreachable, the initiator reaches the backup host within 5 s | 3.7 |
 | [ ] 3.12 | Latency percentiles: p50, p99, p99.9 and max of known samples are exact; one sample is every percentile; no samples is reported as none | 3.8a |

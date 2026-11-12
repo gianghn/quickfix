@@ -29,6 +29,8 @@ class EventLog : public FIX::Log {
   [[nodiscard]] bool Contains(std::string_view text) const;
   // How many events so far contain `text`.
   [[nodiscard]] std::size_t Count(std::string_view text) const;
+  // True once an event contains `text`; false on timeout.
+  [[nodiscard]] bool WaitFor(std::string_view text, std::chrono::milliseconds timeout) const;
   // Every event so far, one per line, for a failing test to print.
   [[nodiscard]] std::string Dump() const;
 

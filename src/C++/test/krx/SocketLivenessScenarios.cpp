@@ -9,15 +9,24 @@
 // disconnects.
 // Rows 3.6 and 3.7 (P1-3): a signal that interrupts the reading thread's poll is not a socket
 // error; the session stays logged on, idle or busy.
+// Rows 3.8 and 3.9 (P1-4): a failed accept is logged and the acceptor keeps taking connections:
+// at once after a signal, after a pause when it ran out of file descriptors.
 #include <pthread.h>
+#include <sys/resource.h>
+#include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <catch_amalgamated.hpp>
 
+#include "Application.h"
 #include "Dictionary.h"
 #include "FieldTypes.h"
 #include "FixFields.h"
@@ -27,6 +36,9 @@
 #include "SessionFactory.h"
 #include "SessionID.h"
 #include "SessionPair.h"
+#include "SessionSettings.h"
+#include "ThreadedSocketAcceptor.h"
+#include "Utility.h"
 
 namespace {
 
@@ -178,6 +190,113 @@ int Heartbeats(krx::SessionPair& pair, int count) {
   }
   return answered;
 }
+
+// A port no one listens on now, for an acceptor to take.
+int FreePort() {
+  const FIX::socket_handle probe = FIX::socket_createAcceptor(0, true);
+  const int port = static_cast<std::uint16_t>(FIX::socket_hostport(probe));  // a short: 32768+
+  FIX::socket_close(probe);
+  return port;
+}
+
+// The gateway's threaded acceptor, listening on its own port for one counterparty; its events
+// (accepted connections, failed accepts) are kept.
+class ListeningAcceptor {
+ public:
+  explicit ListeningAcceptor(const std::string& counterparty)
+      : port_(FreePort()),
+        settings_(Settings(port_, counterparty)),
+        acceptor_(application_, store_, settings_, logs_) {
+    acceptor_.start();
+  }
+
+  ~ListeningAcceptor() { acceptor_.stop(true); }
+
+  ListeningAcceptor(const ListeningAcceptor&) = delete;
+  ListeningAcceptor& operator=(const ListeningAcceptor&) = delete;
+  ListeningAcceptor(ListeningAcceptor&&) = delete;
+  ListeningAcceptor& operator=(ListeningAcceptor&&) = delete;
+
+  [[nodiscard]] int Port() const { return port_; }
+
+  [[nodiscard]] const krx::EventLog& Events() const { return logs_.Events(); }
+
+ private:
+  static FIX::SessionSettings Settings(int port, const std::string& counterparty) {
+    std::istringstream stream(
+        "[DEFAULT]\nConnectionType=acceptor\nSocketAcceptPort=" + std::to_string(port) +
+        "\nSocketReuseAddress=Y\nStartTime=00:00:00\nEndTime=00:00:00\n"
+        "UseDataDictionary=N\n[SESSION]\nBeginString=FIX.4.4\n"
+        "SenderCompID=KRXGW\nTargetCompID=" +
+        counterparty + "\n");
+    FIX::SessionSettings settings;
+    stream >> settings;
+    return settings;
+  }
+
+  int port_;
+  FIX::NullApplication application_;
+  FIX::MemoryStoreFactory store_;
+  krx::EventLogFactory logs_;
+  FIX::SessionSettings settings_;
+  FIX::ThreadedSocketAcceptor acceptor_;
+};
+
+// Blocks SIGUSR1 in the calling thread while it lives, so a signal sent to the process goes to a
+// thread started before (the acceptor's).
+class SignalsBlockedHere {
+ public:
+  SignalsBlockedHere() {
+    sigset_t usr1{};
+    sigemptyset(&usr1);
+    sigaddset(&usr1, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &usr1, &saved_);
+  }
+
+  ~SignalsBlockedHere() { pthread_sigmask(SIG_SETMASK, &saved_, nullptr); }
+
+  SignalsBlockedHere(const SignalsBlockedHere&) = delete;
+  SignalsBlockedHere& operator=(const SignalsBlockedHere&) = delete;
+  SignalsBlockedHere(SignalsBlockedHere&&) = delete;
+  SignalsBlockedHere& operator=(SignalsBlockedHere&&) = delete;
+
+ private:
+  sigset_t saved_{};
+};
+
+// While it lives the process has no file descriptor left: the open-file limit is lowered to 256
+// (when higher) and descriptors are opened up to it. Both are given back when it goes.
+class DescriptorsExhausted {
+ public:
+  DescriptorsExhausted() : base_(FIX::socket_createConnector()) {
+    getrlimit(RLIMIT_NOFILE, &saved_);
+    rlimit lowered = saved_;
+    lowered.rlim_cur = std::min<rlim_t>(saved_.rlim_cur, 256);
+    setrlimit(RLIMIT_NOFILE, &lowered);
+    held_.reserve(256);
+    for (int fd = dup(base_); fd >= 0; fd = dup(base_)) {
+      held_.push_back(fd);
+    }
+  }
+
+  ~DescriptorsExhausted() {
+    for (const int fd : held_) {
+      close(fd);
+    }
+    close(base_);
+    setrlimit(RLIMIT_NOFILE, &saved_);
+  }
+
+  DescriptorsExhausted(const DescriptorsExhausted&) = delete;
+  DescriptorsExhausted& operator=(const DescriptorsExhausted&) = delete;
+  DescriptorsExhausted(DescriptorsExhausted&&) = delete;
+  DescriptorsExhausted& operator=(DescriptorsExhausted&&) = delete;
+
+ private:
+  int base_;
+  rlimit saved_{};
+  std::vector<int> held_;
+};
 
 krx::PairOptions WithLargeMessage5(const std::string& counterparty, int send_timeout_ms) {
   krx::PairOptions options;
@@ -407,6 +526,61 @@ SCENARIO("A signal storm on a busy session causes no disconnect", "[krx][v1][sec
       THEN("every TestRequest is answered") {
         INFO(answered << " answered; events:\n" << pair.Events().Dump());
         REQUIRE((answered == 50));
+      }
+    }
+  }
+}
+
+SCENARIO("The acceptor keeps taking connections after an interrupted accept",
+         "[krx][v1][security][p1-4]") {
+  GIVEN("a listening acceptor whose accepting thread alone takes the process's signals") {
+    InstallInterruptingHandler();
+    const ListeningAcceptor acceptor("KRXAC38");
+    const SignalsBlockedHere blocked;
+    WHEN("50 signals interrupt its accept and then a counterparty connects") {
+      for (int i = 0; i < 50; ++i) {
+        kill(getpid(), SIGUSR1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      const FIX::socket_handle counterparty = FIX::socket_createConnector();
+      FIX::socket_connect(counterparty, "127.0.0.1", acceptor.Port());
+      const bool accepted = acceptor.Events().WaitFor("Accepted connection from", kWait);
+      FIX::socket_close(counterparty);
+      THEN("the connection is accepted") {
+        INFO(acceptor.Events().Dump());
+        REQUIRE(accepted);
+      }
+    }
+  }
+}
+
+SCENARIO("The acceptor backs off and recovers when it runs out of file descriptors",
+         "[krx][v1][security][p1-4]") {
+  GIVEN("a listening acceptor") {
+    const ListeningAcceptor acceptor("KRXAC39");
+    WHEN("a counterparty connects while no file descriptor is left, and again once they free up") {
+      const FIX::socket_handle first = FIX::socket_createConnector();
+      const FIX::socket_handle second = FIX::socket_createConnector();
+      bool reported = false;
+      std::size_t failures = 0;
+      {
+        const DescriptorsExhausted exhausted;
+        FIX::socket_connect(first, "127.0.0.1", acceptor.Port());
+        reported = acceptor.Events().WaitFor("Accept failed", std::chrono::seconds(2));
+        // Half a second without descriptors: with the 100 ms pause about five failed accepts;
+        // without it (Linux keeps the connection waiting) the loop would spin through thousands.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        failures = acceptor.Events().Count("Accept failed");
+      }
+      // macOS drops the connection whose accept failed; Linux keeps it waiting. Either way the
+      // acceptor must take the next one.
+      FIX::socket_connect(second, "127.0.0.1", acceptor.Port());
+      const bool accepted = acceptor.Events().WaitFor("Accepted connection from", kWait);
+      FIX::socket_close(first);
+      FIX::socket_close(second);
+      THEN("the failure is logged, retried after a pause, and a connection is accepted after") {
+        INFO(failures << " failed accepts logged in half a second");
+        REQUIRE((reported && failures <= 20 && accepted));
       }
     }
   }

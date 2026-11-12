@@ -141,8 +141,12 @@ bool SessionPair::WaitLoggedOn(std::chrono::milliseconds timeout) const {
 }
 
 bool SessionPair::WaitForEvent(std::string_view text, std::chrono::milliseconds timeout) const {
+  return logs_.Events().WaitFor(text, timeout);
+}
+
+bool EventLog::WaitFor(std::string_view text, std::chrono::milliseconds timeout) const {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (!logs_.Events().Contains(text)) {
+  while (!Contains(text)) {
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
     }
