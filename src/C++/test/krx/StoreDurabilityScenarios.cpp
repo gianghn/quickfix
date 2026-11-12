@@ -5,6 +5,7 @@
 // Row 4.3 (P0-4, D7): a session whose store cannot write fails closed: the send fails, an error is
 // logged and the session disconnects.
 // Row 4.4 (P0-4): a restart loads only records whose message is whole in the body file.
+// Row 4.6 (P2-4): a stored message comes back with every byte, NULs included.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -208,6 +209,23 @@ SCENARIO("A store reopened after a clean stop keeps its one message", "[krx][v1]
         const std::string one = Read(store, 1);
         INFO("1: " << one);
         REQUIRE((one == Message(1)));
+      }
+    }
+  }
+}
+
+SCENARIO("A message with an embedded NUL comes back from the store whole", "[krx][v1][p2-4]") {
+  GIVEN("a file store") {
+    const krx::TempDir dir("store46");
+    FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+    WHEN("a message whose data field holds a NUL byte is stored") {
+      using namespace std::string_literals;
+      const std::string message = "8=FIX.4.4\00195=3\00196=a\0b\00110=000\001"s;
+      store.set(1, message);
+      THEN("it reads back with every byte") {
+        const std::string back = Read(store, 1);
+        INFO(back.size() << " of " << message.size() << " bytes back");
+        REQUIRE((back == message));
       }
     }
   }
