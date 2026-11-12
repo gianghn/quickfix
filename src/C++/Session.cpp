@@ -454,24 +454,20 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   int current = beginSeqNo;
   bool appMessageJustSent = false;
   std::string messageString;
-  const std::ptrdiff_t resendChunk = 100;
   const Responder* const responder = m_pResponder;
 
   for ( i = messages.begin(); i != messages.end(); ++i )
   {
-    // KRX fork (P0-3): the caller holds m_mutex; every resendChunk messages, let the threads
-    // waiting for it in (up to 10 ms, so a stream of senders cannot stall the resend), and stop if
-    // the connection went away meanwhile.
-    if ( i != messages.begin() && ( i - messages.begin() ) % resendChunk == 0 )
+    // KRX fork (P0-3): the caller holds m_mutex; before each message, let the threads waiting for
+    // it in (up to 10 ms, so a stream of senders cannot stall the resend), and stop if the
+    // connection went away meanwhile.
     {
-      {
-        const ReverseLocker unlocked( m_mutex );
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
-        while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
-          std::this_thread::yield();
-      }
-      if ( m_pResponder != responder ) return;
+      const ReverseLocker unlocked( m_mutex );
+      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
+      while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
+        std::this_thread::yield();
     }
+    if ( m_pResponder != responder ) return;
     appMessageJustSent = false;
     std::unique_ptr<FIX::Message> pMsg;
     std::string strMsgType;

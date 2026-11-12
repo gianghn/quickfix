@@ -111,6 +111,19 @@ int ResentBeforeOrder(krx::SessionPair& pair) {
   }
 }
 
+// Reads until `count` resent (PossDupFlag) messages came, or the timeout; how many came.
+int ReadResent(krx::SessionPair& pair, int count) {
+  int resent = 0;
+  while (resent < count) {
+    const std::string frame = pair.ReadFrame(kWait);
+    if (frame.empty()) {
+      return resent;
+    }
+    resent += frame.contains("\00143=Y\001") ? 1 : 0;
+  }
+  return resent;
+}
+
 // An integer socket option of `s`.
 int SocketOption(FIX::socket_handle s, int level, int name) {
   int value = 0;
@@ -325,6 +338,25 @@ SCENARIO("A sender can place an order while a large resend is in progress",
       THEN("the order goes out before the resend has finished") {
         INFO(resent << " resent messages came before the order; events:\n" << pair.Events().Dump());
         REQUIRE((sent && resent >= 0 && resent < kResent));
+      }
+    }
+  }
+}
+
+SCENARIO("A large resend with no sender waiting is not slowed down", "[krx][v1][security][p0-3]") {
+  GIVEN("a logged-on session with 2000 messages to resend") {
+    krx::SessionPair pair("KRXRS35S", WithManyStoredMessages("KRXRS35S"));
+    LogOn(pair);
+    WHEN("the counterparty asks for them all and reads as fast as it can") {
+      const auto asked = std::chrono::steady_clock::now();
+      AskForMessagesFrom(pair, 2);
+      const int resent = ReadResent(pair, kResent);
+      const auto took = std::chrono::steady_clock::now() - asked;
+      THEN("all 2000 arrive within 5 seconds") {
+        INFO(resent << " resent in "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+                    << " ms");
+        REQUIRE((resent == kResent && took < std::chrono::seconds(5)));
       }
     }
   }
