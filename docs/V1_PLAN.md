@@ -89,7 +89,7 @@ The owner may change any of these before its phase starts.
 |---|---|---|---|---|
 | 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
-| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | in progress: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30), 3.4 (#31), 3.6 (#32), 3.7 P1-10 (#33), 3.7 P1-12 (#34); row 3.2's test and the handover to do |
+| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | built, waiting for merge: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30) merged; 3.4 (#31), 3.6 (#32), 3.7 (#33, #34), row 3.2's test (#35) open; 3.8 (benchmark) later |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | not started |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | not started |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
@@ -104,11 +104,11 @@ The owner may change any of these before its phase starts.
 
 ### Next steps (12 Nov 2026)
 
-1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10) and #34 (3.7, P1-12), each retargeted to `krx/main` and green first.
+1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), each retargeted to `krx/main` and green first.
 2. ~~3.7 P1-12~~ done in #34 (row 3.11). The gateway needs a short `ReconnectInterval` (1–2 s) for a 5 s failover.
-3. Row 3.2: `stop()` returns while the exchange reads nothing, no thread left in send (no test yet).
-4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner.
-5. Phase 3 handover note; Progress row to done.
+3. ~~Row 3.2~~ test in #35 (a guard: it already held).
+4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
+5. ~~Phase 3 handover~~ written (Handover 3, in #35).
 6. Phase 6 (6.1, 6.2, 6.4–6.6; 6.3 is done) and Phase 8: no owner question blocks them.
 7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
@@ -303,3 +303,28 @@ store lookup; a timing assertion over sockets would be flaky).
 (Phase 6.3) the first time a test sent from another thread, which the gateway does for every
 order; a stored message with a bad checksum still stops a resend (Phase 4); the Mull artifact on
 calls taking a temporary string is in MAINTENANCE §5.
+
+### Handover 3 — 12 Nov 2026
+
+**Built:** 3.1 send timeout (#25), 3.2 keepalive and TCP user timeout (#26), 3.3 `disconnect()`
+releases a stuck sender (#27), 3.5 `EINTR` in the reader (#30), 3.4 a sender gets in during a
+large resend (#31, with `m_mutexWaiters`), 3.6 a failed accept no longer stops the acceptor (#32),
+3.7 the session timers run once a second whatever arrives (#33) and connect gives up after 2 s so
+the backup host is reached within 5 s (#34), row 3.2's test (#35). Also done early: 6.3 (#28, #29).
+**Red → green:** rows 3.1, 3.3–3.11 each red on `krx/main` before their fix, in their PRs (3.4:
+the order came after all 2,001 resent messages; 3.6: never accepted; 3.10: no timeout in 8 s;
+3.11: still connecting to the primary after 5 s). Row 3.2 was never red: `onStop` already shuts the
+connections down, so it is a guard. Extra rows from Mull: resend not slowed with no sender waiting,
+a disconnect stops a resend.
+**Checks:** no `dod.json` in this repo; per PR: `krx_ut` (65/65 at #35) and `ut` 53/53 on macOS,
+`krx_ut` in `ubuntu:24.04` (Docker, as CI's Linux), FIX.4.4 acceptance 59/59 plain and threaded
+where the acceptor or resend changed, `lint.sh .` passing. CI (Ubuntu, macOS, Rocky 9, ASan+UBSan,
+TSan, Mull) ran green on #31 except Mull; #32–#35 get CI once retargeted to `krx/main`.
+**Decisions taken:** resend lets waiters in before each message, up to 10 ms; the yield mutant is
+accepted as equivalent (owner) until 3.8; accept retries at once after `EINTR`/`ECONNABORTED`, after
+100 ms when out of descriptors; connect timeout 2 s, fixed. No new settings in this phase.
+**Away from the spec:** 3.4 is not "in chunks" but before each message (Mull: the chunk test only
+had equivalent mutants). `ECONNABORTED` (3.8) has no test: it cannot be provoked on demand.
+**Left for the owner:** merge #31–#35 in order; the gateway needs `ReconnectInterval` 1–2 s for a
+5 s failover; the SSL acceptor and plain `SocketServer` keep the old accept loop (the gateway runs
+neither, and Q6 is no TLS); 3.8 (benchmark) when convenient.

@@ -4,7 +4,7 @@
 // Row 3.3 (P0-3): every session socket has keepalive and, on Linux, a TCP user timeout of two
 // heartbeat intervals, so the kernel drops a peer that stops acknowledging.
 // Rows 3.2 and 3.4 (P0-3): disconnect() releases a sender stuck in send at once, before it waits
-// for the session lock that sender holds.
+// for the session lock that sender holds; stop() returns with no thread left in send.
 // Row 3.5 (P0-3): a large resend lets a sender in between chunks, and stops when the session
 // disconnects.
 // Rows 3.6 and 3.7 (P1-3): a signal that interrupts the reading thread's poll is not a socket
@@ -206,17 +206,21 @@ int FreePort() {
 }
 
 // The gateway's threaded acceptor, listening on its own port for one counterparty; its events
-// (accepted connections, failed accepts) are kept.
+// (accepted connections, failed accepts) are kept. `extra_settings` go into [DEFAULT].
 class ListeningAcceptor {
  public:
-  explicit ListeningAcceptor(const std::string& counterparty)
+  explicit ListeningAcceptor(const std::string& counterparty,
+                             const std::string& extra_settings = "")
       : port_(FreePort()),
-        settings_(Settings(port_, counterparty)),
+        settings_(Settings(port_, counterparty, extra_settings)),
         acceptor_(application_, store_, settings_, logs_) {
     acceptor_.start();
   }
 
   ~ListeningAcceptor() { acceptor_.stop(true); }
+
+  // The gateway stops the acceptor, as at the end of the day or on shutdown.
+  void Stop() { acceptor_.stop(true); }
 
   ListeningAcceptor(const ListeningAcceptor&) = delete;
   ListeningAcceptor& operator=(const ListeningAcceptor&) = delete;
@@ -228,13 +232,14 @@ class ListeningAcceptor {
   [[nodiscard]] const krx::EventLog& Events() const { return logs_.Events(); }
 
  private:
-  static FIX::SessionSettings Settings(int port, const std::string& counterparty) {
+  static FIX::SessionSettings Settings(int port, const std::string& counterparty,
+                                       const std::string& extra_settings) {
     std::istringstream stream(
         "[DEFAULT]\nConnectionType=acceptor\nSocketAcceptPort=" + std::to_string(port) +
         "\nSocketReuseAddress=Y\nStartTime=00:00:00\nEndTime=00:00:00\n"
-        "UseDataDictionary=N\n[SESSION]\nBeginString=FIX.4.4\n"
-        "SenderCompID=KRXGW\nTargetCompID=" +
-        counterparty + "\n");
+        "UseDataDictionary=N\n" +
+        extra_settings +
+        "[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGW\nTargetCompID=" + counterparty + "\n");
     FIX::SessionSettings settings;
     stream >> settings;
     return settings;
@@ -246,6 +251,64 @@ class ListeningAcceptor {
   krx::EventLogFactory logs_;
   FIX::SessionSettings settings_;
   FIX::ThreadedSocketAcceptor acceptor_;
+};
+
+// A Logon (MsgSeqNum 1, HeartBtInt 30) from `counterparty` to the gateway (KRXGW).
+std::string LogonFrom(const std::string& counterparty) {
+  FIX::Message logon;
+  FIX::Header& header = logon.getHeader();
+  header.setField(FIX::BeginString("FIX.4.4"));
+  header.setField(FIX::MsgType("A"));
+  header.setField(FIX::SenderCompID(counterparty));
+  header.setField(FIX::TargetCompID("KRXGW"));
+  header.setField(FIX::MsgSeqNum(1));
+  header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+  logon.setField(FIX::EncryptMethod(0));
+  logon.setField(FIX::HeartBtInt(30));
+  return logon.toString();
+}
+
+// The exchange's end: connects to the gateway on `port` and logs on as `counterparty`; the test
+// then reads nothing from it.
+FIX::socket_handle ConnectAndLogOn(int port, const std::string& counterparty) {
+  const FIX::socket_handle exchange = FIX::socket_createConnector();
+  FIX::socket_connect(exchange, "127.0.0.1", port);
+  const std::string logon = LogonFrom(counterparty);
+  FIX::socket_send(exchange, logon.data(), logon.size());
+  return exchange;
+}
+
+// A gateway thread sending a message too large for the socket to `counterparty`'s session.
+class LargeSender {
+ public:
+  explicit LargeSender(const std::string& counterparty)
+      : session_(FIX::Session::lookupSession(FIX::SessionID("FIX.4.4", "KRXGW", counterparty))),
+        thread_([this] {
+          if (session_ != nullptr) {
+            FIX::Message order = NewOrder();
+            order.setField(FIX::Text(std::string(kLargeText, 'x')));
+            session_->send(order);
+          }
+          returned_.store(true);
+        }) {}
+
+  ~LargeSender() { thread_.join(); }
+
+  LargeSender(const LargeSender&) = delete;
+  LargeSender& operator=(const LargeSender&) = delete;
+  LargeSender(LargeSender&&) = delete;
+  LargeSender& operator=(LargeSender&&) = delete;
+
+  // True once its send is over (sent, failed or timed out).
+  [[nodiscard]] bool Returned() const { return returned_.load(); }
+
+  // True when there was no such session, so nothing was sent.
+  [[nodiscard]] bool Failed() const { return session_ == nullptr; }
+
+ private:
+  FIX::Session* session_;
+  std::atomic<bool> returned_{false};
+  std::thread thread_;
 };
 
 // A host that drops every packet (non-routable): a connect to it gets no answer at all.
@@ -670,6 +733,30 @@ SCENARIO("When the primary exchange host is unreachable the initiator reaches th
              << gateway.Events().Dump());
         REQUIRE((gateway.Events().Contains(std::string("Connecting to ") + kUnreachableHost) &&
                  reached && took < std::chrono::seconds(5)));
+      }
+    }
+  }
+}
+
+SCENARIO("When the exchange stops reading, stop() returns and no thread is left in send",
+         "[krx][v1][security][p0-3]") {
+  GIVEN("a counterparty that reads nothing and a sender stuck in send (10 s send timeout)") {
+    ListeningAcceptor gateway("KRXSP32", "SendTimeout=10\n");
+    const FIX::socket_handle exchange = ConnectAndLogOn(gateway.Port(), "KRXSP32");
+    const bool logged_on = gateway.Events().WaitFor("Responding to logon request", kWait);
+    const LargeSender sender("KRXSP32");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // into the stuck send
+    WHEN("the gateway stops the acceptor") {
+      const auto start = std::chrono::steady_clock::now();
+      gateway.Stop();
+      const auto took = std::chrono::steady_clock::now() - start;
+      const bool sender_out = sender.Returned() && !sender.Failed();
+      FIX::socket_close(exchange);
+      THEN("stop returns before the 10 s send timeout, with the sender already out of send") {
+        INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+             << " ms; events:\n"
+             << gateway.Events().Dump());
+        REQUIRE((logged_on && took < std::chrono::seconds(8) && sender_out));
       }
     }
   }
