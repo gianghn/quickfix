@@ -318,8 +318,12 @@ constexpr const char* kUnreachableHost = "10.255.255.1";
 // and a backup on `backup_port`, retrying every second; its events are kept.
 class FailoverInitiator {
  public:
-  FailoverInitiator(const std::string& counterparty, int backup_port)
-      : settings_(Settings(counterparty, backup_port)),
+  // The primary is `primary_host`:`primary_port` (by default the host that drops every packet, on
+  // the backup's port).
+  FailoverInitiator(const std::string& counterparty, int backup_port,
+                    const std::string& primary_host = kUnreachableHost, int primary_port = 0)
+      : settings_(Settings(counterparty, backup_port, primary_host,
+                           primary_port == 0 ? backup_port : primary_port)),
         initiator_(application_, store_, settings_, logs_) {
     initiator_.start();
   }
@@ -334,15 +338,15 @@ class FailoverInitiator {
   [[nodiscard]] const krx::EventLog& Events() const { return logs_.Events(); }
 
  private:
-  static FIX::SessionSettings Settings(const std::string& counterparty, int backup_port) {
-    const std::string port = std::to_string(backup_port);
+  static FIX::SessionSettings Settings(const std::string& counterparty, int backup_port,
+                                       const std::string& primary_host, int primary_port) {
     std::istringstream stream(
         "[DEFAULT]\nConnectionType=initiator\nReconnectInterval=1\nHeartBtInt=30\n"
         "StartTime=00:00:00\nEndTime=00:00:00\nUseDataDictionary=N\n[SESSION]\n"
         "BeginString=FIX.4.4\nSenderCompID=" +
-        counterparty + "\nTargetCompID=KRXGW\nSocketConnectHost=" + kUnreachableHost +
-        "\nSocketConnectPort=" + port +
-        "\nSocketConnectHost1=127.0.0.1\nSocketConnectPort1=" + port + "\n");
+        counterparty + "\nTargetCompID=KRXGW\nSocketConnectHost=" + primary_host +
+        "\nSocketConnectPort=" + std::to_string(primary_port) +
+        "\nSocketConnectHost1=127.0.0.1\nSocketConnectPort1=" + std::to_string(backup_port) + "\n");
     FIX::SessionSettings settings;
     stream >> settings;
     return settings;
@@ -675,10 +679,15 @@ SCENARIO("The acceptor backs off and recovers when it runs out of file descripto
       const FIX::socket_handle first = FIX::socket_createConnector();
       const FIX::socket_handle second = FIX::socket_createConnector();
       bool reported = false;
+      std::size_t failures = 0;
       {
         const DescriptorsExhausted exhausted;
         FIX::socket_connect(first, "127.0.0.1", acceptor.Port());
         reported = acceptor.Events().WaitFor("Accept failed", std::chrono::seconds(2));
+        // Half a second without descriptors: with the 100 ms pause about five failed accepts;
+        // without it (Linux keeps the connection waiting) the loop would spin through thousands.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        failures = acceptor.Events().Count("Accept failed");
       }
       // macOS drops the connection whose accept failed; Linux keeps it waiting. Either way the
       // acceptor must take the next one.
@@ -686,9 +695,9 @@ SCENARIO("The acceptor backs off and recovers when it runs out of file descripto
       const bool accepted = acceptor.Events().WaitFor("Accepted connection from", kWait);
       FIX::socket_close(first);
       FIX::socket_close(second);
-      THEN("the failed accept is logged and a connection is accepted afterwards") {
-        INFO(acceptor.Events().Dump());
-        REQUIRE((reported && accepted));
+      THEN("the failure is logged, retried after a pause, and a connection is accepted after") {
+        INFO(failures << " failed accepts logged in half a second");
+        REQUIRE((reported && failures <= 20 && accepted));
       }
     }
   }
@@ -726,13 +735,47 @@ SCENARIO("When the primary exchange host is unreachable the initiator reaches th
       const auto started = std::chrono::steady_clock::now();
       const FailoverInitiator gateway("KRXFO311", exchange.Port());
       const bool reached = exchange.Events().WaitFor("Accepted connection from", kWait);
+      const bool connected = gateway.Events().WaitFor("Connection succeeded", kWait);
       const auto took = std::chrono::steady_clock::now() - started;
       THEN("it tried the primary first and reached the backup within 5 seconds") {
         INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
              << " ms; gateway events:\n"
              << gateway.Events().Dump());
         REQUIRE((gateway.Events().Contains(std::string("Connecting to ") + kUnreachableHost) &&
-                 reached && took < std::chrono::seconds(5)));
+                 reached && connected && took < std::chrono::seconds(5)));
+      }
+    }
+  }
+}
+
+SCENARIO("When the primary exchange host refuses the connection the initiator moves to the backup",
+         "[krx][v1][security][p1-12]") {
+  GIVEN("an exchange listening on its backup host, and nothing listening on the primary's port") {
+    const ListeningAcceptor exchange("KRXFO312");
+    const int refusing = FreePort();
+    WHEN("the gateway's initiator starts") {
+      const FailoverInitiator gateway("KRXFO312", exchange.Port(), "127.0.0.1", refusing);
+      const bool connected = gateway.Events().WaitFor("Connection succeeded", kWait);
+      THEN("the refused attempt is reported as failed, and only the backup connection succeeds") {
+        INFO(gateway.Events().Dump());
+        REQUIRE((connected && gateway.Events().Contains("Connection failed") &&
+                 gateway.Events().Count("Connection succeeded") == 1));
+      }
+    }
+  }
+}
+
+SCENARIO("When the primary exchange host name does not resolve the initiator moves to the backup",
+         "[krx][v1][security][p1-12]") {
+  GIVEN("an exchange listening on its backup host, and a primary host name that cannot resolve") {
+    const ListeningAcceptor exchange("KRXFO313");
+    WHEN("the gateway's initiator starts") {
+      const FailoverInitiator gateway("KRXFO313", exchange.Port(), "no-such-host.invalid");
+      const bool connected = gateway.Events().WaitFor("Connection succeeded", kWait);
+      THEN("the unresolved attempt is reported as failed, and only the backup one succeeds") {
+        INFO(gateway.Events().Dump());
+        REQUIRE((connected && gateway.Events().Contains("Connection failed") &&
+                 gateway.Events().Count("Connection succeeded") == 1));
       }
     }
   }
