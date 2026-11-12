@@ -205,6 +205,10 @@ bool ThreadedSocketConnection::read()
     }
     else if( result < 0 ) // Error
     {
+#ifndef _MSC_VER
+      // KRX fork (P1-3): a signal is not a socket error; read again.
+      if( errno == EINTR ) return true;
+#endif
       throw SocketRecvFailed( result );
     }
 

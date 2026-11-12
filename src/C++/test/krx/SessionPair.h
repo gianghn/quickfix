@@ -158,6 +158,9 @@ class SessionPair {
   // The gateway disconnects the session, as on stop() or a risk limit.
   void Disconnect() { session_.disconnect(); }
 
+  // The thread reading for the session, for a test to aim signals at.
+  [[nodiscard]] std::thread::native_handle_type ReaderThread() { return reader_.native_handle(); }
+
   // The session's end of the connection.
   [[nodiscard]] FIX::socket_handle SessionSocket() const { return connection_->getSocket(); }
 

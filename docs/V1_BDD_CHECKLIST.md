@@ -54,8 +54,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 3.3 | Every session socket has keepalive and a user timeout of about two heartbeats | 3.2 |
 | [x] 3.4 | `disconnect()` releases a sender stuck in send before it waits for the session lock | 3.3 |
 | [ ] 3.5 | A sender can place an order while a large resend is in progress | 3.4 |
-| [ ] 3.6 | A signal storm on an idle session causes no disconnect | 3.5 |
-| [ ] 3.7 | A signal storm on a busy session causes no disconnect | 3.5 |
+| [x] 3.6 | A signal storm on an idle session causes no disconnect | 3.5 |
+| [x] 3.7 | A signal storm on a busy session causes no disconnect | 3.5 |
 | [ ] 3.8 | The acceptor keeps taking connections after an interrupted or aborted accept | 3.6 |
 | [ ] 3.9 | The acceptor backs off and recovers when it runs out of file descriptors | 3.6 |
 | [ ] 3.10 | A peer trickling one byte every 500 ms is timed out per HeartBtInt | 3.7 |

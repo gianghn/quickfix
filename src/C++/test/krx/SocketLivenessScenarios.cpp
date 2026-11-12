@@ -5,8 +5,14 @@
 // heartbeat intervals, so the kernel drops a peer that stops acknowledging.
 // Rows 3.2 and 3.4 (P0-3): disconnect() releases a sender stuck in send at once, before it waits
 // for the session lock that sender holds.
+// Rows 3.6 and 3.7 (P1-3): a signal that interrupts the reading thread's poll is not a socket
+// error; the session stays logged on, idle or busy.
+#include <pthread.h>
+
 #include <chrono>
+#include <csignal>
 #include <string>
+#include <thread>
 
 #include <catch_amalgamated.hpp>
 
@@ -76,6 +82,43 @@ int DropAfterMs(FIX::socket_handle s) {
 #else
   return SocketOption(s, IPPROTO_TCP, TCP_RXT_CONNDROPTIME) * 1000;
 #endif
+}
+
+// A handler that does nothing, installed without SA_RESTART so a signal interrupts poll (EINTR),
+// as a profiler, debugger or runtime signal would.
+void IgnoreSignal(int /*signal*/) {}
+
+void InstallInterruptingHandler() {
+  struct sigaction action{};
+  action.sa_handler = IgnoreSignal;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  sigaction(SIGUSR1, &action, nullptr);
+}
+
+// Sends `count` SIGUSR1s to `thread`, one a millisecond.
+void SignalStorm(std::thread::native_handle_type thread, int count) {
+  for (int i = 0; i < count; ++i) {
+    pthread_kill(thread, SIGUSR1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+std::string TestRequest(const krx::SessionPair& pair, int seq_num) {
+  FIX::Message request;
+  request.getHeader().setField(FIX::MsgType("1"));  // TestRequest
+  request.setField(FIX::TestReqID("still-there"));
+  return pair.FromCounterparty(request, seq_num);
+}
+
+// Sends TestRequests 2..(count + 1) and counts the Heartbeats that answer them.
+int Heartbeats(krx::SessionPair& pair, int count) {
+  int answered = 0;
+  for (int seq = 2; seq < count + 2; ++seq) {
+    pair.Write(TestRequest(pair, seq));
+    answered += krx::MsgTypeOf(pair.ReadFrame(kWait)) == "0" ? 1 : 0;
+  }
+  return answered;
 }
 
 krx::PairOptions WithLargeMessage5(const std::string& counterparty, int send_timeout_ms) {
@@ -217,6 +260,38 @@ SCENARIO("disconnect releases a sender stuck in send before it waits for the ses
              << " ms; events:\n"
              << pair.Events().Dump());
         REQUIRE((took < std::chrono::seconds(2) && !pair.Events().Contains("Send timed out")));
+      }
+    }
+  }
+}
+
+SCENARIO("A signal storm on an idle session causes no disconnect", "[krx][v1][security][p1-3]") {
+  GIVEN("a logged-on, idle session") {
+    InstallInterruptingHandler();
+    krx::SessionPair pair("KRXSG36");
+    LogOn(pair);
+    WHEN("its reading thread gets 200 signals") {
+      SignalStorm(pair.ReaderThread(), 200);
+      THEN("the session still answers a TestRequest") {
+        INFO(pair.Events().Dump());
+        REQUIRE((Heartbeats(pair, 1) == 1));
+      }
+    }
+  }
+}
+
+SCENARIO("A signal storm on a busy session causes no disconnect", "[krx][v1][security][p1-3]") {
+  GIVEN("a logged-on session") {
+    InstallInterruptingHandler();
+    krx::SessionPair pair("KRXSG37");
+    LogOn(pair);
+    WHEN("its reading thread gets signals while 50 TestRequests come in") {
+      std::thread storm([&pair] { SignalStorm(pair.ReaderThread(), 300); });
+      const int answered = Heartbeats(pair, 50);
+      storm.join();
+      THEN("every TestRequest is answered") {
+        INFO(answered << " answered; events:\n" << pair.Events().Dump());
+        REQUIRE((answered == 50));
       }
     }
   }
