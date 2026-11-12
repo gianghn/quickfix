@@ -6,10 +6,13 @@
 // logged and the session disconnects.
 // Row 4.4 (P0-4): a restart loads only records whose message is whole in the body file.
 // Row 4.6 (P2-4): a stored message comes back with every byte, NULs included.
-// Row 4.5 (P0-5): with FileStoreSync=Y, body, header and seqnums are synced before send returns.
+// Row 4.5 (P0-5): with FileStoreSync=Y a sent message's body is synced before send returns (one
+// sync); a restart rebuilds the header and the next sender seqnum from the body.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -43,7 +46,27 @@ void LogOn(krx::SessionPair& pair) {
   REQUIRE((krx::MsgTypeOf(pair.ReadFrame(kWait)) == "A"));
 }
 
-// How many times `store` (a FileStore) has forced its files to disk.
+// Message `seq_num` as the gateway sent it: framed, with BodyLength and CheckSum, as the store's
+// recovery finds messages in the body file.
+std::string Framed(int seq_num) {
+  FIX::Message message;
+  FIX::Header& header = message.getHeader();
+  header.setField(FIX::BeginString("FIX.4.4"));
+  header.setField(FIX::MsgType("j"));
+  header.setField(FIX::SenderCompID("KRXGW"));
+  header.setField(FIX::TargetCompID("KRXEX"));
+  header.setField(FIX::MsgSeqNum(seq_num));
+  message.setField(FIX::Text(std::string(100, 'f')));
+  return message.toString();
+}
+
+// The store's seqnums file, as the session last wrote it: next sender and next target seqnum.
+void WriteSeqNums(const krx::TempDir& dir, int sender, int target) {
+  std::ofstream file(dir.Path() / "FIX.4.4-KRXGW-KRXEX.seqnums", std::ios::trunc);
+  file << std::setw(10) << std::setfill('0') << sender << " : " << std::setw(10) << target;
+}
+
+// How many times `store` (a FileStore) has forced a file to disk.
 std::uint64_t SyncsOf(const FIX::MessageStore* store) {
   const auto* file_store = dynamic_cast<const FIX::FileStore*>(store);
   return file_store == nullptr ? 0 : file_store->getSyncCount();
@@ -254,9 +277,9 @@ SCENARIO("With store sync on, a stored message and its seqnum are on disk before
       const std::uint64_t before = SyncsOf(pair.Store());
       const bool sent = pair.Send(Order());
       const std::uint64_t after = SyncsOf(pair.Store());
-      THEN("body, header and seqnums are synced by the time send returns") {
+      THEN("its body is synced by the time send returns, at one file sync") {
         INFO(before << " file syncs before the send, " << after << " after");
-        REQUIRE((sent && after - before >= 3));
+        REQUIRE((sent && after - before == 1));
       }
     }
   }
@@ -273,6 +296,105 @@ SCENARIO("With store sync off, the store does not force anything to disk", "[krx
         const std::uint64_t syncs = SyncsOf(pair.Store());
         INFO(syncs << " syncs");
         REQUIRE((sent && syncs == 0));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync on, a received message costs no sync", "[krx][v1][p0-5]") {
+  GIVEN("a logged-on session whose file store syncs to disk") {
+    const krx::TempDir dir("store45in");
+    krx::PairOptions options = OnFileStore(dir);
+    options.file_store_sync = true;
+    krx::SessionPair pair("KRXSI45", options);
+    LogOn(pair);
+    WHEN("the exchange sends a Heartbeat, then a TestRequest the session answers") {
+      const std::uint64_t before = SyncsOf(pair.Store());
+      FIX::Message heartbeat;
+      heartbeat.getHeader().setField(FIX::MsgType("0"));
+      pair.Write(pair.FromCounterparty(heartbeat, 2));
+      FIX::Message request;
+      request.getHeader().setField(FIX::MsgType("1"));
+      request.setField(FIX::TestReqID("sync"));
+      pair.Write(pair.FromCounterparty(request, 3));
+      const bool answered = krx::MsgTypeOf(pair.ReadFrame(kWait)) == "0";
+      const std::uint64_t after = SyncsOf(pair.Store());
+      THEN("only the session's answer was synced") {
+        INFO(before << " file syncs before, " << after << " after");
+        REQUIRE((answered && after - before == 1));
+      }
+    }
+  }
+}
+
+SCENARIO("After a crash that lost header and seqnum writes, a restart recovers them from the body",
+         "[krx][v1][p0-5]") {
+  GIVEN("messages 1 to 3 on disk, the header as after message 1, the seqnums as after message 2") {
+    const krx::TempDir dir("store45rec");
+    std::uintmax_t first_record = 0;
+    {
+      FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), true);
+      store.set(1, Framed(1));
+      first_record = std::filesystem::file_size(HeaderFile(dir));
+      store.set(2, Framed(2));
+      store.set(3, Framed(3));
+    }
+    std::filesystem::resize_file(HeaderFile(dir), first_record);
+    WriteSeqNums(dir, 3, 1);  // names message 3 as the next to send: the body shows it was sent
+    WHEN("the store is opened again, twice") {
+      {
+        const FIX::FileStore once(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      }
+      const FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      THEN("messages 1 to 3 read back and the next seqnum to send is 4") {
+        const int next = store.getNextSenderMsgSeqNum();
+        INFO("next sender seqnum " << next << "; 3: " << Read(store, 3));
+        REQUIRE((Read(store, 1) == Framed(1) && Read(store, 2) == Framed(2) &&
+                 Read(store, 3) == Framed(3) && next == 4));
+      }
+    }
+  }
+}
+
+SCENARIO("A half-written message at the end of the body is cut off on restart", "[krx][v1][p0-5]") {
+  GIVEN("messages 1 and 2 on disk, followed by the first bytes of message 3") {
+    const krx::TempDir dir("store45cut");
+    {
+      FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), true);
+      store.set(1, Framed(1));
+      store.set(2, Framed(2));
+    }
+    std::ofstream(BodyFile(dir), std::ios::app) << Framed(3).substr(0, 40);
+    WHEN("the store is opened again and message 3 is written whole") {
+      {
+        FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), true);
+        store.set(3, Framed(3));
+      }
+      const FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      THEN("1 to 3 read back whole and the body holds exactly the three messages") {
+        const std::uintmax_t whole = Framed(1).size() + Framed(2).size() + Framed(3).size();
+        INFO("body " << std::filesystem::file_size(BodyFile(dir)) << " bytes, expected " << whole);
+        REQUIRE((Read(store, 1) == Framed(1) && Read(store, 2) == Framed(2) &&
+                 Read(store, 3) == Framed(3) &&
+                 std::filesystem::file_size(BodyFile(dir)) == whole));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync on, only a seqnum the body cannot rebuild is synced", "[krx][v1][p0-5]") {
+  GIVEN("a file store with sync on") {
+    const krx::TempDir dir("store45seq");
+    FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), true);
+    WHEN("the next target seqnum moves, then the next sender seqnum moves with no message stored") {
+      const std::uint64_t start = store.getSyncCount();
+      store.incrNextTargetMsgSeqNum();
+      const std::uint64_t after_target = store.getSyncCount();
+      store.incrNextSenderMsgSeqNum();
+      const std::uint64_t after_sender = store.getSyncCount();
+      THEN("the target change is not synced, the sender change is") {
+        INFO(start << " -> " << after_target << " -> " << after_sender << " file syncs");
+        REQUIRE((after_target == start && after_sender == start + 1));
       }
     }
   }

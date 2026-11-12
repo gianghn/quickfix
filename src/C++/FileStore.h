@@ -90,8 +90,8 @@ public:
   FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync = false );
   virtual ~FileStore();
 
-  // KRX fork (P0-5): how many file syncs the store has done (FileStoreSync=Y); a sent message
-  // costs three (body, header, seqnums).
+  // KRX fork (P0-5): how many file syncs the store has done (FileStoreSync=Y); a stored message
+  // costs one (its body).
   [[nodiscard]] std::uint64_t getSyncCount() const { return m_syncCount; }
 
   bool set( int, const std::string& ) EXCEPT ( IOException );
@@ -122,9 +122,11 @@ private:
   bool readFromFile( int offset, int size, std::string& msg );
   void setSeqNum();
   void setSession();
-  // KRX fork (P0-5): FileStoreSync; each throws IOException when a sync fails.
-  void syncToDisk();
-  void syncFile( FILE* file, const std::string& name );
+  // KRX fork (P0-5): FileStoreSync. True once `file` is on disk.
+  bool syncedToDisk( FILE* file );
+  // KRX fork (P0-5): indexes the body's messages past the last header record (after a crash).
+  void recoverUnindexed();
+  void indexRecovered( int msgSeqNum, std::int64_t offset, std::size_t size );
   // KRX fork (P0-4): undoes a failed set() and throws.
   void rollBack( std::int64_t msgEnd, std::int64_t headerEnd, const std::string& error );
 
@@ -143,10 +145,10 @@ private:
   FILE* m_seqNumsFile;
   FILE* m_sessionFile;
 
-  // KRX fork (P0-5): FileStoreSync. A set() leaves its message to be synced with the seqnums that
-  // follow it, so a sent message costs one sync point.
+  // KRX fork (P0-5): FileStoreSync. Only the body is synced: the header and the next sender seqnum
+  // are rebuilt from it after a crash (recoverUnindexed), and a next target seqnum that is behind
+  // only makes the counterparty resend.
   bool m_sync = false;
-  bool m_unsyncedMessages = false;
   std::uint64_t m_syncCount = 0;
 };
 }

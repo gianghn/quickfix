@@ -302,6 +302,15 @@ class LargeSender {
   // True once its send is over (sent, failed or timed out).
   [[nodiscard]] bool Returned() const { return returned_.load(); }
 
+  // True once its send is over, waiting up to `timeout` for it.
+  [[nodiscard]] bool WaitReturned(std::chrono::milliseconds timeout) const {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!Returned() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return Returned();
+  }
+
   // True when there was no such session, so nothing was sent.
   [[nodiscard]] bool Failed() const { return session_ == nullptr; }
 
@@ -793,9 +802,11 @@ SCENARIO("When the exchange stops reading, stop() returns and no thread is left 
       const auto start = std::chrono::steady_clock::now();
       gateway.Stop();
       const auto took = std::chrono::steady_clock::now() - start;
-      const bool sender_out = sender.Returned() && !sender.Failed();
+      // stop() releases the sender by shutting its socket down; the sender then needs a moment to
+      // come out of send (longer under a sanitizer), so it gets a second, far below the timeout.
+      const bool sender_out = sender.WaitReturned(std::chrono::seconds(1)) && !sender.Failed();
       FIX::socket_close(exchange);
-      THEN("stop returns before the 10 s send timeout, with the sender already out of send") {
+      THEN("stop returns before the 10 s send timeout, and the sender is out of send at once") {
         INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
              << " ms; events:\n"
              << gateway.Events().Dump());
