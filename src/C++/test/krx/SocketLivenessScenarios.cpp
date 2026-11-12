@@ -562,10 +562,15 @@ SCENARIO("The acceptor backs off and recovers when it runs out of file descripto
       const FIX::socket_handle first = FIX::socket_createConnector();
       const FIX::socket_handle second = FIX::socket_createConnector();
       bool reported = false;
+      std::size_t failures = 0;
       {
         const DescriptorsExhausted exhausted;
         FIX::socket_connect(first, "127.0.0.1", acceptor.Port());
         reported = acceptor.Events().WaitFor("Accept failed", std::chrono::seconds(2));
+        // Half a second without descriptors: with the 100 ms pause about five failed accepts;
+        // without it (Linux keeps the connection waiting) the loop would spin through thousands.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        failures = acceptor.Events().Count("Accept failed");
       }
       // macOS drops the connection whose accept failed; Linux keeps it waiting. Either way the
       // acceptor must take the next one.
@@ -573,9 +578,9 @@ SCENARIO("The acceptor backs off and recovers when it runs out of file descripto
       const bool accepted = acceptor.Events().WaitFor("Accepted connection from", kWait);
       FIX::socket_close(first);
       FIX::socket_close(second);
-      THEN("the failed accept is logged and a connection is accepted afterwards") {
-        INFO(acceptor.Events().Dump());
-        REQUIRE((reported && accepted));
+      THEN("the failure is logged, retried after a pause, and a connection is accepted after") {
+        INFO(failures << " failed accepts logged in half a second");
+        REQUIRE((reported && failures <= 20 && accepted));
       }
     }
   }
