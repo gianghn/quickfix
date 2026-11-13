@@ -147,6 +147,22 @@ theirs). `perf`: sync mode uses 0.25 CPU over 8 s (the process waits for the dis
 0.57; the engine's top functions are dictionary validation (2–5 %) and time formatting (about
 4 %).
 
+Batch send (the spike's `Session::sendToTargetBatch`: the batch stored under one hold of the
+session lock without a sync, one `fdatasync`, then the socket writes in order; no extra thread),
+one sender, `FileStoreSync=Y`, the same Rocky pod, 3 interleaved rounds, medians. "Call" is one
+`sendToTargetBatch`: every order in the batch is on disk and written when it returns.
+
+| Batch | msg/s | × today | call p50 µs | call p99 µs | syncs per order |
+|---|---|---|---|---|---|
+| 1 (today's `send()`) | 1,544 | 1.0 | 647 (one send) | — | 1 |
+| 4 | 5,542 | 3.6 | 680 | 1,058 | 1/4 |
+| 16 | 18,271 | 11.8 | 782 | 1,333 | 1/16 |
+| 64 | 56,800 | 36.8 | 980 | 1,437 | 1/64 |
+
+Step timers at 64: the sync per batch 721 µs, the socket writes 143 µs (2.2 µs an order), the store
+writes about 3 µs an order. Throughput is batch ÷ (sync + about 5 µs × batch): 90 % of the ideal
+at 4, 57 % at 64.
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

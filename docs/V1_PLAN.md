@@ -78,7 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
-| Q18 | With `FileStoreSync=Y` one sender reaches about 25 k msg/s: one sync per message, in turn, under the session lock (Phase 15). How do messages share a sync? | 15.3 decoupled: `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared: senders on one session wait for one sync together, `send()` keeps its meaning · neither: one sync per message | 1a, with a bounded queue and a per-seqnum "not sent" event for the gateway, if 11.7's production disk syncs in more than about 100 µs (spikes, Phase 15: Linux sync mode about 1 k msg/s, 1a about 100 k, 1b 0.7 × senders) | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
+| Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
 
 ## Ground rules
 
@@ -362,7 +362,17 @@ outside the session lock until its message went out.
   about 20 µs; 1a 87 k–245 k msg/s; 1b 1.4 k / 3.1 k / 6.1 k / 11.3 k at 1 / 4 / 8 / 16 senders.
   With 8 senders 1a waits 82 % of `send()` for the session lock, so its best case is one sender.
   15.1 on the quiet node: file 138 k → 254 k msg/s, no percentile worse.
-- Not measured: a batch send API (`sendToTarget` of several messages, one sync) would give a
+- **Batch send (the middle option, spiked 14 Nov 2026)**: `Session::sendToTargetBatch` stores a
+  batch under one hold of the session lock without a sync, syncs once, then writes the batch to the
+  socket in order; no extra thread. One sender on Rocky: 5.5 k / 18.3 k / 56.8 k msg/s at batches of
+  4 / 16 / 64 (3.6× / 11.8× / 36.8× today); every order of a batch is on disk and written when the
+  call returns, after 680 / 782 / 980 µs (p50; today 647 µs for one). `send()` keeps its meaning and
+  no thread is added, so no teardown work; the costs are a new call in the engine and the
+  quickfix-rs binding, a gateway that drains its order queue into one call (never waiting to fill a
+  batch, which would add latency), a result that says which orders went out when a socket write
+  fails mid-batch (the spike returns all or none), and heartbeats and resends waiting behind a
+  batch's sync while it holds the lock (about 1 ms at 64, as one send today).
+- Before the batch spike, it read: a batch send API (`sendToTarget` of several messages, one sync) would give a
   single gateway thread 1a's batching with 1b's meaning; it changes the quickfix-rs binding.
 
 ### For the owner
