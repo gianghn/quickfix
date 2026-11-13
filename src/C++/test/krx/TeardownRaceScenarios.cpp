@@ -4,19 +4,87 @@
 // two threads sharing a session lock raised TSan reports; a copy also copied its lock state. The
 // session flags and the last sent time, read by the reading thread without the session lock, are
 // atomic.
+// Rows 6.1 and 6.2 (P0-11): a connection that closes itself and is deleted while gateway threads
+// send went around Session::disconnect(): the session kept its logon state, never called onLogout,
+// and cleared its responder without the lock a sender holds while it writes through it.
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <thread>
+#include <vector>
 
 #include <catch_amalgamated.hpp>
 
 #include "FieldTypes.h"
+#include "FixFields.h"
+#include "Message.h"
 #include "Mutex.h"
+#include "SessionPair.h"
 #include "SessionState.h"
 
 namespace {
 
 constexpr int kIncrements = 20000;
+constexpr int kSenders = 4;
+constexpr std::chrono::seconds kWait{5};
+
+void LogOn(krx::SessionPair& pair) {
+  pair.Write(pair.Logon(1));
+  REQUIRE(pair.WaitLoggedOn(kWait));
+  REQUIRE((krx::MsgTypeOf(pair.ReadFrame(kWait)) == "A"));
+}
+
+// An order from the gateway (a BusinessMessageReject stands in for it).
+FIX::Message Order() {
+  FIX::Message order;
+  order.getHeader().setField(FIX::MsgType("j"));
+  order.setField(FIX::RefMsgType("D"));
+  order.setField(FIX::BusinessRejectReason(0));
+  return order;
+}
+
+// kSenders gateway threads sending orders through `pair` without pause until Stop().
+class Senders {
+ public:
+  explicit Senders(krx::SessionPair& pair) {
+    threads_.reserve(kSenders);
+    for (int i = 0; i < kSenders; ++i) {
+      threads_.emplace_back([this, &pair] {
+        while (!stop_.load()) {
+          pair.Send(Order());
+          ++sends_;
+        }
+      });
+    }
+  }
+
+  // Returns once they have sent `count` orders between them.
+  void WaitForSends(int count) const {
+    while (sends_.load() < count) {
+      std::this_thread::yield();
+    }
+  }
+
+  void Stop() {
+    stop_.store(true);
+    for (std::thread& thread : threads_) {
+      thread.join();
+    }
+    threads_.clear();
+  }
+
+  ~Senders() { Stop(); }
+
+  Senders(const Senders&) = delete;
+  Senders& operator=(const Senders&) = delete;
+  Senders(Senders&&) = delete;
+  Senders& operator=(Senders&&) = delete;
+
+ private:
+  std::atomic<bool> stop_{false};
+  std::atomic<int> sends_{0};
+  std::vector<std::thread> threads_;
+};
 
 // A UTC timestamp to nanosecond precision.
 FIX::UtcTimeStamp At(int hour, int minute, int second, int nanos) {
@@ -140,6 +208,39 @@ SCENARIO("A mutex locked twice is free only after the outer lock goes", "[krx][v
       contender.join();
       THEN("the other thread gets in only after the outer lock is released too") {
         REQUIRE((!entered_early && entered_after));
+      }
+    }
+  }
+}
+
+SCENARIO("Many senders while the connection drops raise no data race and no use after free",
+         "[krx][v1][tsan][p0-11]") {
+  GIVEN("a logged-on session and four gateway threads sending orders without pause") {
+    krx::SessionPair pair("KRXTD61");
+    LogOn(pair);
+    Senders senders(pair);
+    WHEN("the connection closes itself and is deleted while they send") {
+      senders.WaitForSends(100);
+      pair.DropConnection();
+      const bool sent_after = pair.Send(Order());
+      senders.Stop();
+      THEN("every sender returns, and an order after the drop reports not sent") {
+        INFO(pair.Events().Dump());
+        REQUIRE_FALSE(sent_after);
+      }
+    }
+  }
+}
+
+SCENARIO("A dropped connection always clears the session's logon state", "[krx][v1][p0-11]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXTD62");
+    LogOn(pair);
+    WHEN("the connection closes itself and is deleted") {
+      pair.DropConnection();
+      THEN("the gateway is told the session logged out") {
+        INFO(pair.Events().Dump());
+        REQUIRE_FALSE(pair.LoggedOn());
       }
     }
   }

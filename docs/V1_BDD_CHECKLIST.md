@@ -89,8 +89,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 
 | # | Scenario | Plan |
 |---|---|---|
-| [ ] 6.1 | Many senders while the connection drops raise no TSan report and no use-after-free | 6.1, 6.2 |
-| [ ] 6.2 | A dropped connection always clears the session's logon state | 6.1 |
+| [x] 6.1 | Many senders while the connection drops raise no TSan report and no use-after-free | 6.1, 6.2 |
+| [x] 6.2 | A dropped connection always clears the session's logon state | 6.1 |
 | [ ] 6.3 | The threaded acceptance suite raises no unsuppressed TSan report | 6.3 |
 | [ ] 6.4 | `onLogout` runs after the session lock is released | 6.4 |
 | [ ] 6.5 | Repeated forced and graceful acceptor stops never hang and never close a foreign file | 6.5 |

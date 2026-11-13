@@ -795,6 +795,16 @@ void Session::disconnect()
   m_state.resendRange( 0, 0 );
 }
 
+void Session::releaseResponder( Responder* pR )
+{
+  bool attached = false;
+  {
+    const Locker r( m_responderMutex );
+    attached = m_pResponder == pR;
+  }
+  if ( attached ) disconnect();
+}
+
 bool Session::resend( Message& message )
 {
   Header& header = message.getHeader();

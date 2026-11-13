@@ -89,10 +89,10 @@ The owner may change any of these before its phase starts.
 |---|---|---|---|---|
 | 1 | Test harness, sanitizer and mutation CI | 1.0–1.9 | static analysis, fuzzing groups, P2-5, P2-6, K-3 | done (#4–#18); per-function Mull scores (U-2) come from the nightly run |
 | 2 | Hostile input never kills the process | 2.1–2.7 | P0-1, P0-2, P0-7, P1-11, P1-13 | done (#19–#23) |
-| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | built, waiting for merge: 3.1 (#25), 3.2 (#26), 3.3 (#27), 3.5 (#30) merged; 3.4 (#31), 3.6 (#32), 3.7 (#33, #34), row 3.2's test (#35) open; 3.8 (benchmark) later |
-| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | built, waiting for merge: 4.1 and 4.2 (#36, #37), 4.3 (#38), 4.5 (#39), 4.4 (#40, option B #41); the crash runbook (Q1) to write |
-| 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | built, waiting for merge: 5.1 (#42), 5.2 (#43), 5.3 (#44); 5.4 not needed (Q3) |
-| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | not started |
+| 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | done (#25–#35); 3.8 (benchmark) later |
+| 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | done (#36–#41); the crash runbook (Q1) to write |
+| 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
+| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | building: 6.1 and 6.2 (#46); 6.3 done early (#28, #29), its TSan row to come; 6.4–6.6 next |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
@@ -102,9 +102,9 @@ The owner may change any of these before its phase starts.
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
 
-### Next steps (12 Nov 2026)
+### Next steps (13 Nov 2026)
 
-1. **Owner:** merge the Phase 3 stack in order: #31 (3.4; its Mull job fails on the accepted yield mutant, see 3.8), then #32 (3.6), #33 (3.7, P1-10), #34 (3.7, P1-12) and #35 (row 3.2's test, Handover 3), then the Phase 4 stack #36–#41 (Handover 4) and the Phase 5 stack #42–#44 (Handover 5), each retargeted to `krx/main` and green first.
+1. ~~**Owner:** merge the Phase 3–5 stacks~~ merged (#31–#44, 12 Nov 2026). #45 fixes `krx/main`'s nightly mutation job (`ut` crashed on store files a mutant left behind).
 2. ~~3.7 P1-12~~ done in #34 (row 3.11). The gateway needs a short `ReconnectInterval` (1–2 s) for a 5 s failover.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
@@ -183,7 +183,7 @@ Nothing else can be TDD'd until this exists.
 ### Phase 6 — Race-free teardown and locking · **high** · `quickfix`
 
 - 6.1 P0-11: `setResponder` takes `m_mutex`; all connection teardown goes through `Session::disconnect()`, which also clears `sentLogon` (`Session.h:238-245`, `ThreadedSocketConnection.cpp:65-75`).
-- 6.2 P0-11: `m_disconnect` becomes `std::atomic<bool>`.
+- 6.2 P0-11: `m_disconnect` becomes `std::atomic<bool>`. *Already atomic since Phase 3 (P0-3).*
 - 6.3 P1-1: cherry-pick #772 (`std::recursive_mutex`), #773, #774, #781 as one set, reviewed together (`Mutex.h`, `SessionState.h:58-150`). *Done early, in Phase 3 (12 Nov 2026): item 3.3's cross-thread `disconnect()` cannot pass TSan without them. #772 in #28; #773, #774 (simplified: no range checks before 1970 or after 2262) and #781 in the next PR. Row 6.3, the threaded acceptance suite under TSan, is still checked in Phase 6.*
 - 6.4 P1-2: call `onLogout` after releasing `m_mutex`; document which callbacks still run under the lock (`Session.cpp:581-688`).
 - 6.5 P1-7: test-for, then cherry-pick #740 (`onStop` after `thread_join`); check it against fork fix `5d85a415` (`Acceptor.cpp:248-250`).

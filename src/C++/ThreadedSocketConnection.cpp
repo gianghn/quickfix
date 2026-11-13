@@ -63,7 +63,6 @@ ThreadedSocketConnection::ThreadedSocketConnection
   FD_ZERO( &m_fds );
   FD_SET( m_socket, &m_fds );
 #endif
-  if ( m_pSession ) m_pSession->setResponder( this );
 }
 
 ThreadedSocketConnection::~ThreadedSocketConnection()
@@ -170,6 +169,15 @@ bool ThreadedSocketConnection::send( const std::string& msg )
 
 bool ThreadedSocketConnection::connect()
 {
+  // KRX fork (P0-11): the session takes this connection only once it is connected, and in the
+  // connection's thread: setResponder takes the session lock, never under the initiator's.
+  if ( !connectSocket() ) return false;
+  if ( m_pSession ) m_pSession->setResponder( this );
+  return true;
+}
+
+bool ThreadedSocketConnection::connectSocket()
+{
   // do the bind in the thread as name resolution may block
   if ( !m_sourceAddress.empty() || m_sourcePort )
     socket_bind( m_socket, m_sourceAddress.c_str(), m_sourcePort );
@@ -251,7 +259,12 @@ bool ThreadedSocketConnection::read()
   catch ( std::exception& e )
   {
     if( m_disconnect )
+    {
+      // KRX fork (P0-11): when this connection closed itself, the session drops it as on any other
+      // drop; when the session closed it, releaseResponder does nothing.
+      if( m_pSession ) m_pSession->releaseResponder( this );
       return false;
+    }
 
     if( m_pSession )
     {
