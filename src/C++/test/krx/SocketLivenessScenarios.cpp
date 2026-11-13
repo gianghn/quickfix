@@ -822,6 +822,26 @@ SCENARIO("A Reject above a gap leaves the missing message to the resend",
   }
 }
 
+// Row U-8 (8.7): what U-6's wait read was all handed to the session after stop() had shut the
+// socket down, so stop() waited for up to 64 MB of messages (krx_stress echo-on, 2 of 20 runs).
+SCENARIO("A shut-down connection drops the backlog it read while sending",
+         "[krx][v1][security][u-8]") {
+  GIVEN("a session resending 2000 messages while the counterparty writes 20,000 of its own") {
+    krx::SessionPair pair("KRXRSU8D", WithManyStoredMessages("KRXRSU8D"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 3, 20000), kWait));
+    WHEN("the engine shuts the socket down, as stop() does") {
+      ::shutdown(pair.SessionSocket(), SHUT_RDWR);
+      pair.WaitReaderStopped();
+      THEN("the session stops instead of processing the rest of that backlog") {
+        INFO(pair.AppMessages() << " of 20000 processed after the shutdown");
+        REQUIRE((pair.AppMessages() < 20000));
+      }
+    }
+  }
+}
+
 // Row U-9 (Q16): the cap is the MaxQueuedMessages setting; 0 is no limit, as upstream.
 SCENARIO("The MaxQueuedMessages setting caps the queue above a gap", "[krx][v1][security][u-9]") {
   GIVEN("an acceptor session configured with MaxQueuedMessages=5") {

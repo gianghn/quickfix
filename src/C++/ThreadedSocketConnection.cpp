@@ -140,6 +140,17 @@ bool ThreadedSocketConnection::waitWritable( std::chrono::steady_clock::time_poi
 }
 #endif
 
+// KRX fork (U-8): true once the socket is shut down or broken (it does not wait).
+bool ThreadedSocketConnection::shutDown() const
+{
+#ifdef _MSC_VER
+  return false;
+#else
+  pollfd pfd{ m_socket, POLLOUT, 0 };
+  return poll( &pfd, 1, 0 ) > 0 && pfd.revents != POLLOUT;
+#endif
+}
+
 // KRX fork (U-6, Q14): hands the next part of what waitWritable read to the parser; false when
 // nothing is left, and read() reads the socket.
 bool ThreadedSocketConnection::feedDrained()
@@ -253,6 +264,9 @@ bool ThreadedSocketConnection::read()
   try
   {
     // Wait for input (1 second timeout); KRX fork (U-6): what a send's wait read comes first.
+    // KRX fork (U-8): unless the socket was shut down meanwhile (stop()): then that backlog is
+    // dropped, as unread bytes are; nothing in it moved the sequence numbers on.
+    if ( m_drainedAt < m_drained.size() && shutDown() ) throw SocketRecvFailed( 0 );
     const bool drained = feedDrained();
 #if _MSC_VER
     const int result = drained ? 0 : select( 0, &readset, 0, 0, &timeout );
