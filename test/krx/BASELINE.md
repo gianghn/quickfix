@@ -55,6 +55,19 @@ Same method, a later set of interleaved runs (one sync run had a 13 ms disk stal
 | file, sync off | 65,775 | 59.8 | 97.2 | 147.9 |
 | file, `FileStoreSync=Y`, option B | 27,124 | 102.8 | 127.5 | 195.1 |
 
+## Fewer store system calls, 13 Nov 2026 (plan item 15.1, U-16)
+
+`krx_bench file` and `sync`, 200,000 orders and 20,000 round trips, Release, Mac M4 Max, five
+interleaved before/after runs. Another session loaded the machine (load average 7–8), so the medians
+are noisy (msg/s ranged 45 k–67 k for the same build); best of 5 shows the change better.
+
+| Store | before: best / median msg/s | after: best / median msg/s | RTT p50 µs (median) before → after | p99.9 µs (median) before → after |
+|---|---|---|---|---|
+| file, sync off | 66,840 / 63,562 | 71,833 / 61,986 | 61.9 → 59.1 | 196.6 → 134.3 |
+| file, `FileStoreSync=Y` | 25,662 / 15,362 | 27,730 / 23,003 | 140.9 → 104.5 | 3,867 → 4,296 (disk stalls both sides) |
+
+To measure again on a quiet machine before the PR merges (D9: no p50/p99.9 regression over 10 %).
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

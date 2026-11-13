@@ -150,6 +150,9 @@ private:
   // only makes the counterparty resend.
   bool m_sync = false;
   std::uint64_t m_syncCount = 0;
+  // KRX fork (15.1): where the next body and header record go: the files' ends, kept in memory.
+  std::int64_t m_msgEnd = 0;
+  std::int64_t m_headerEnd = 0;
 };
 }
 

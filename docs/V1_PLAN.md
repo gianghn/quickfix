@@ -78,6 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
+| Q18 | With `FileStoreSync=Y` one sender reaches about 25 k msg/s: one sync per message, in turn, under the session lock (Phase 15). How do messages share a sync? | 15.3 decoupled: `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared: senders on one session wait for one sync together, `send()` keeps its meaning · neither: one sync per message | decide after the 15.3 and 15.4 spikes are measured | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
 
 ## Ground rules
 
@@ -109,6 +110,7 @@ The owner may change any of these before its phase starts.
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
+| 15 | Store throughput | 15.0–15.5 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 first, then the 15.3 and 15.4 spikes; 15.2 and the build of 15.3/15.4 wait for Q18 |
 
 ### Next steps (13 Nov 2026)
 
@@ -124,7 +126,8 @@ The owner may change any of these before its phase starts.
 
 Independence: Phase 1 first. Phases 2, 3, 4 and 7 are independent of each other once Phase 1 is
 in (stack them in this order to keep the merges simple). Phase 5 needs 3 (send path). Phase 6
-needs 3. Phase 8 needs 2–7. Phase 9 can start any time. Phase 10 needs 5 and 9. Phase 11 needs 8
+needs 3. Phase 8 needs 2–7. Phase 15 needs 4 and stacks on Phase 8 (its harness); it ends before
+Phase 11 measures. Phase 9 can start any time. Phase 10 needs 5 and 9. Phase 11 needs 8
 and 10. Phase 12 needs 8. Phases 13 and 14 run alongside 11–12 and finish last.
 
 ### Phase 1 — Test harness, sanitizer and mutation CI · **medium** · `quickfix`
@@ -278,6 +281,51 @@ Non-code; each item has an owner and evidence filed with the go/no-go pack.
 - 14.4 Phased rollout: shadow/UAT on production lines, a capped account set on day 1, then a ramp, each with exit criteria.
 - 14.5 Rollback drill: previous build deployable, store compatible both ways, seqnum hand-over rehearsed.
 - 14.6 Hypercare roster (08:30–15:30, two weeks) and day-1 EOD reconciliation with zero unexplained breaks.
+
+### Phase 15 — Store throughput · **high** · `quickfix` · 15.2–15.4 builds wait for Q18
+
+Added 13 Nov 2026 (Q1: "if the sync costs too much speed, we look at it again"). Profile of
+`krx_bench` (Mac M4 Max, one sender, `sample`): mem 240 k, file 64 k, file + sync 25 k msg/s. The
+sending thread holds the session lock through `persist`, so the store sets the pace:
+
+- file store: about 65 % of the sending thread is store system calls: 3 `write`s (body, header
+  record, seqnums), 2 `lseek`s (`fseek(SEEK_END)` on body and header) and a `rewind` per sent
+  message; `rewind` + `fprintf` + `write` of the seqnums per received message (64 % of the reading
+  thread's work).
+- sync: `fsync` of the body 46 %, the three writes 44 %, the socket 3 %. One sync per message, one
+  after the other: throughput can never pass 1 / sync latency.
+- macOS `fsync` does not flush the drive cache (`F_FULLFSYNC` does), so the Mac sync numbers are
+  neither the real durability nor the real cost; 11.7 measures on the production disk.
+
+Items (the owner's numbering of 13 Nov 2026 in brackets):
+
+- 15.0 `Stress.cpp` clean under clang-tidy (array decay, `const`, the vararg `open`, designated
+  initializers). *Already done in Phase 8 (a7532eaa); checked again here.*
+- 15.1 [3] Fewer system calls per message, same files, same format, same guarantees: body and header
+  record written with `pwrite` at end offsets kept in memory (no `fseek`/`ftell`), the seqnums with
+  one `pwrite` at 0 (no `rewind`/`fprintf`/`fflush`), `get` reads with `pread`. A failed write still
+  rolls both files back (P0-4); Windows keeps the stdio path. Measured before and after (file and
+  sync, three interleaved runs, medians) into `test/krx/BASELINE.md`.
+- 15.2 [2] No seqnums write for a sent message the body already records: skipped when the next
+  sender seqnum is the last stored message + 1; target changes are still written. On open the next
+  sender seqnum is the larger of the seqnums file and the last header record + 1. Risk: a sender
+  seqnum set lower on purpose (an admin reset) looks like a stale file; proposal: lowering also
+  appends a marker record `N,-1,0` (offset −1, which `populateCache`, old builds included, already
+  skips), so the last record tells the truth. Red first; waits for Q18 (15.3 changes what the body
+  holds when).
+- 15.3 [1a] Spike, then Q18: decoupled group commit. `persist` writes without a sync and `send()`
+  returns; a flusher per store syncs everything written so far and only then hands those messages
+  to the socket, in seqnum order. Nothing reaches the exchange before it is on disk. Changes what
+  `send()` returning `true` means (row 4.5, Q2): written and queued, not yet synced or sent; a sync
+  or socket failure after the return must disconnect and log an error. The spike measures the
+  throughput and latency (sync batch size, p50/p99.9) and lists the risks.
+- 15.4 [1b] Spike, then Q18: shared sync. `persist` writes under the session lock; the sender then
+  waits outside the lock for a sync covering its message (one waiter syncs for all), and the synced
+  messages go to the socket in seqnum order. `send()` keeps its meaning. Gains only with several
+  threads sending on one session: `krx_bench` gets a `senders=N` option. The spike measures 1, 2,
+  4 and 8 senders and lists the risks.
+- 15.5 Decide with the owner (Q18) from the 15.3 and 15.4 numbers and risks, then build the choice
+  red first (rows 15.7–15.11), with 15.2 if it still pays.
 
 ### For the owner
 
