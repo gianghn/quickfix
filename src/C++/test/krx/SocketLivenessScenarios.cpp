@@ -690,11 +690,13 @@ SCENARIO("A resend completes while the counterparty is resending its own backlog
       const bool written = pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), kWait);
       const int resent = written ? ReadResent(pair, kResent) : 0;
       const bool delivered = AppMessagesReach(pair, kResent);
-      THEN("every message is resent, the counterparty's all arrive, and no send timed out") {
+      // Each of the counterparty's messages arrives once: a second copy is "too low".
+      const bool twice = pair.WaitForEvent("MsgSeqNum too low", std::chrono::milliseconds(300));
+      THEN("every message is resent, the counterparty's all arrive once, no send timed out") {
         INFO("backlog written: " << written << ", " << resent << " resent, " << pair.AppMessages()
                                  << " delivered; events:\n"
                                  << pair.Events().Dump());
-        REQUIRE((written && resent == kResent && delivered &&
+        REQUIRE((written && resent == kResent && delivered && !twice &&
                  !pair.Events().Contains("Send timed out")));
       }
     }

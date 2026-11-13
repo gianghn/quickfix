@@ -156,6 +156,9 @@ bool ThreadedSocketConnection::shutDown() const
 bool ThreadedSocketConnection::feedDrained()
 {
   if ( m_drainedAt == m_drained.size() ) return false;
+  // KRX fork (U-8): unless the socket was shut down meanwhile (stop()): then that backlog is
+  // dropped, as unread bytes are; nothing in it moved the sequence numbers on.
+  if ( shutDown() ) throw SocketRecvFailed( 0 );
   const std::size_t size = std::min( sizeof( m_buffer ), m_drained.size() - m_drainedAt );
   m_parser.addToStream( m_drained.substr( m_drainedAt, size ) );
   m_drainedAt += size;
@@ -264,9 +267,6 @@ bool ThreadedSocketConnection::read()
   try
   {
     // Wait for input (1 second timeout); KRX fork (U-6): what a send's wait read comes first.
-    // KRX fork (U-8): unless the socket was shut down meanwhile (stop()): then that backlog is
-    // dropped, as unread bytes are; nothing in it moved the sequence numbers on.
-    if ( m_drainedAt < m_drained.size() && shutDown() ) throw SocketRecvFailed( 0 );
     const bool drained = feedDrained();
 #if _MSC_VER
     const int result = drained ? 0 : select( 0, &readset, 0, 0, &timeout );
