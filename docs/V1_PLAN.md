@@ -109,7 +109,7 @@ The owner may change any of these before its phase starts.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
 5. ~~Phase 3 handover~~ written (Handover 3, in #35).
-6. ~~Phase 6~~ built (#46–#50, Handover 6). **Owner:** merge #45, then #46–#50 in order. Next: Phase 7 (upstream picks) or Phase 8 (gap root cause, long runs; 8.7 also takes the initiator's stop order and `onStop` spin): no owner question blocks them.
+6. ~~Phase 6~~ merged (#45–#50, Handover 6). ~~Phase 7~~ built (#51–#55, Handover 7). **Owner:** merge #51–#55 in order. Next: Phase 8 (gap root cause, long runs; 8.7 also takes the initiator's stop order and `onStop` spin): no owner question blocks it.
 7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
 ## Phases
@@ -412,3 +412,29 @@ test made them fail; Phase 8.7 (shutdown under load) takes them, red first.
 **Away from the spec:** none.
 **Left for the owner:** merge #45 (nightly mutation fix; scores are 50–51 %, the job now takes over
 2 of its 3 hours), then the Phase 6 stack #46–#50 in order, each retargeted and green first.
+*Merged 13 Nov 2026 (#45–#50), each green in CI on the `krx/main` it merged into.*
+
+### Handover 7 — 13 Nov 2026
+
+**Built:** 7.1 a GapFill drops the queued messages it skips and logs `GapFill to N dropped K queued
+messages` (#715, #51); 7.2 `FieldMap` self-assignment keeps the map, move assignment frees the
+replaced groups (#764, #52); 7.5 `findCAList` frees each CA path (`7deb8275`, TLS builds only,
+#53); 7.6 nested repeating group counts are validated (our check, after #743, #54) and validation
+settings apply with `UseDataDictionary=N` (#755, #55); 7.7 a ledger line per pick and every
+upstream test in `ut`. 7.3 and 7.4 not built (Q5: no `NonStopSession`; Q6: no TLS). Scenarios in
+`UpstreamPicksScenarios.cpp`.
+**Red → green:** 7.1 no event (the skipped messages stayed queued) → event; 7.2 self-assignment
+kept nothing and the replaced group was never freed → kept, freed; 7.6 802=2 with one entry passed
+→ `RepeatingGroupCountMismatch`, and `ValidateFieldsHaveValues=N` still refused an empty field →
+accepted. Upstream tests: #764's three, #743's and #755's red, then green; #715's two already
+passed (the fork drained the queue). 7.5 has no test (no TLS build).
+**Checks:** no `dod.json`; per PR: `krx_ut` (98 cases at #55) and `ut` (53 cases, 1974
+assertions) on macOS, FIX.4.4 acceptance 59/59 plain and threaded, `lint.sh .` passing; TSan
+`krx_ut` (7.1) and ASan+LSan on the 7.1/7.2 scenarios in `ubuntu:24.04`. CI runs as each PR is
+retargeted to `krx/main`.
+**Decisions taken:** 7.1 adds the event, which upstream lacks (without it no test sees the fix;
+the counterparty gap-filling messages it sent is worth an alert) and leaves out #715's redundant
+`nextQueued`; 7.6 checks nested counts with our own code, since #743's code refuses valid messages
+here; the four validation setting names became `constexpr const char*` (house lint).
+**Away from the spec:** none.
+**Left for the owner:** merge #51–#55 in order (each retargeted and green first). Next: Phase 8.
