@@ -774,7 +774,8 @@ SCENARIO("At most 10,000 messages wait above a gap, and the resend brings the re
       SkipThenResend(pair, 20000);
       THEN("the queue stopped at 10,000, said so, and every message arrived once") {
         INFO(pair.AppMessages() << " delivered");
-        REQUIRE((pair.Events().Contains("Queue full") && pair.AppMessages() == 20001));
+        // 10,000 dropped: an event on the 1st, 1001st, … 9001st.
+        REQUIRE((pair.Events().Count("Queue full") == 10 && pair.AppMessages() == 20001));
       }
     }
   }
