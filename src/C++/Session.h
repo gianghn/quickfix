@@ -246,11 +246,14 @@ public:
 
   void setResponder( Responder* pR )
   {
+    // KRX fork (P0-11): under m_mutex too, which a sender holds while it writes through the
+    // responder, so the old one is never cleared (and deleted) mid-write.
+    const Locker l( m_mutex );
     if (m_refreshOnLogon)
       refresh();
     if( !checkSessionTime(m_timestamper()) )
       reset();
-    const Locker l( m_responderMutex );
+    const Locker r( m_responderMutex );
     m_pResponder = pR;
   }
 
@@ -259,6 +262,9 @@ public:
   void next( const std::string&, const UtcTimeStamp& now, bool queued = false );
   void next( const Message&, const UtcTimeStamp& now, bool queued = false );
   void disconnect();
+  // KRX fork (P0-11): the connection `pR` is going away. While it is still the session's responder
+  // (it closed itself), the session disconnects as on any other drop: logon state cleared, onLogout.
+  void releaseResponder( Responder* pR );
 
   int getExpectedSenderNum() { return m_state.getNextSenderMsgSeqNum(); }
   int getExpectedTargetNum() { return m_state.getNextTargetMsgSeqNum(); }

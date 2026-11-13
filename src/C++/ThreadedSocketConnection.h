@@ -62,6 +62,7 @@ public:
   bool read();
 
 private:
+  bool connectSocket();
   bool readMessage( std::string& msg ) EXCEPT ( SocketRecvFailed );
   void processStream();
   bool send( const std::string& );

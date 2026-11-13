@@ -211,6 +211,10 @@ class SessionPair {
   // The next whole message the session sent; empty after the timeout or when the session closed.
   [[nodiscard]] std::string ReadFrame(std::chrono::milliseconds timeout);
   [[nodiscard]] bool WaitLoggedOn(std::chrono::milliseconds timeout) const;
+
+  // True between the session's onLogon and onLogout callbacks.
+  [[nodiscard]] bool LoggedOn() const { return application_.LoggedOn(); }
+
   // True once the session closed the connection (what it sent before is dropped); false on timeout.
   [[nodiscard]] bool WaitClosed(std::chrono::milliseconds timeout);
   // A Logon from the counterparty with this sequence number and heartbeat interval, sent now.
@@ -240,6 +244,14 @@ class SessionPair {
     if (reader_.joinable()) {
       reader_.join();
     }
+  }
+
+  // The connection closes itself (as on a garbled message before Logon), its reading thread stops,
+  // and it is deleted, as ThreadedSocketAcceptor::releaseConnection does.
+  void DropConnection() {
+    connection_->disconnect();
+    WaitReaderStopped();
+    connection_.reset();
   }
 
   // The thread reading for the session, for a test to aim signals at.

@@ -63,14 +63,13 @@ ThreadedSocketConnection::ThreadedSocketConnection
   FD_ZERO( &m_fds );
   FD_SET( m_socket, &m_fds );
 #endif
-  if ( m_pSession ) m_pSession->setResponder( this );
 }
 
 ThreadedSocketConnection::~ThreadedSocketConnection()
 {
   if ( m_pSession )
   {
-    m_pSession->setResponder( 0 );
+    m_pSession->releaseResponder( this ); // KRX fork (P0-11): was setResponder( 0 )
     Session::unregisterSession( m_pSession->getSessionID() );
   }
   // The one place the socket's number is released; the owner deletes the connection when no
@@ -169,6 +168,15 @@ bool ThreadedSocketConnection::send( const std::string& msg )
 }
 
 bool ThreadedSocketConnection::connect()
+{
+  // KRX fork (P0-11): the session takes this connection only once it is connected, and in the
+  // connection's thread: setResponder takes the session lock, never under the initiator's.
+  if ( !connectSocket() ) return false;
+  if ( m_pSession ) m_pSession->setResponder( this );
+  return true;
+}
+
+bool ThreadedSocketConnection::connectSocket()
 {
   // do the bind in the thread as name resolution may block
   if ( !m_sourceAddress.empty() || m_sourcePort )
