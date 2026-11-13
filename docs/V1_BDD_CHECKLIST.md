@@ -160,7 +160,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 ## 15. Store throughput — Phase 15 (src/C++/test/krx/StoreThroughputScenarios.cpp)
 
 Rows 15.1–15.3 guard a change that must not change behaviour (they pass before and after 15.1; its
-evidence is U-16). Rows 15.7–15.11 are written for whichever of 15.3 and 15.4 Q18 picks.
+evidence is U-16). Rows 15.7–15.11 were for 15.3 and 15.4, which Q18 (14 Nov 2026) did not pick;
+rows 15.12–15.17 are for its choice, 15.6 and 15.7.
 
 | # | Scenario | Plan |
 |---|---|---|
@@ -170,11 +171,17 @@ evidence is U-16). Rows 15.7–15.11 are written for whichever of 15.3 and 15.4 
 | [ ] 15.4 | A restart after sent messages whose seqnums were not written resumes at the last stored message + 1 | 15.2 |
 | [ ] 15.5 | A sender seqnum set lower than the last stored message survives a restart | 15.2 |
 | [ ] 15.6 | A received message still moves the target seqnum on file | 15.2 |
-| [ ] 15.7 | With decoupled sync, no message reaches the exchange before it is on disk | 15.3 |
-| [ ] 15.8 | With decoupled sync, a sync that fails after `send()` returned disconnects the session with an error logged, and the message never reaches the exchange | 15.3 |
-| [ ] 15.9 | With decoupled sync, messages reach the exchange in seqnum order | 15.3 |
-| [ ] 15.10 | With shared sync and several senders on one session, each `send()` returns only once its message is on disk and written, with fewer syncs than messages | 15.4 |
-| [ ] 15.11 | With shared sync, a failed sync fails every waiting sender and disconnects the session once | 15.4 |
+| [–] 15.7 | With decoupled sync, no message reaches the exchange before it is on disk — not built: Q18 | 15.3 |
+| [–] 15.8 | With decoupled sync, a sync that fails after `send()` returned disconnects the session with an error logged, and the message never reaches the exchange — not built: Q18 | 15.3 |
+| [–] 15.9 | With decoupled sync, messages reach the exchange in seqnum order — not built: Q18 | 15.3 |
+| [–] 15.10 | With shared sync and several senders on one session, each `send()` returns only once its message is on disk and written, with fewer syncs than messages — not built: Q18 | 15.4 |
+| [–] 15.11 | With shared sync, a failed sync fails every waiting sender and disconnects the session once — not built: Q18 | 15.4 |
+| [ ] 15.12 | Without store sync, every message stored more than one flush interval ago is on disk, while the session keeps sending | 15.6 |
+| [ ] 15.13 | Without store sync, a flush that fails disconnects the session with an error logged | 15.6 |
+| [ ] 15.14 | Stopping a session with background flush running ends its flusher, and nothing it stored is left unflushed | 15.6 |
+| [ ] 15.15 | With store sync, a batch of orders costs one sync and reaches the exchange whole and in order | 15.7 |
+| [ ] 15.16 | With store sync, no order of a batch reaches the exchange before the batch is on disk, and a failed sync sends none of them and disconnects | 15.7 |
+| [ ] 15.17 | When the connection fails in the middle of a batch, the result says which orders went out | 15.7 |
 
 ## Outside the suite
 

@@ -78,7 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
-| Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
+| Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | **batch send with sync, background flush without** (owner, 14 Nov 2026): `FileStoreSync=Y` uses batch send (15.7), nothing reaches the exchange before it is on disk; `FileStoreSync=N` gets a background `fdatasync` every few ms (15.6), a short loss window on host crash, handled by the Q1 runbook. 1a and 1b are not built |
 
 ## Ground rules
 
@@ -110,7 +110,7 @@ The owner may change any of these before its phase starts.
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.5 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 built (p99.9 to measure again on a quiet node); 15.3 and 15.4 spiked and measured (Handover 15); 15.2 and the build wait for Q18 |
+| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 built (p99.9 to measure again on a quiet node); 15.3 and 15.4 spiked and measured (Handover 15); 15.2 and the build wait for Q18 |
 
 ### Next steps (13 Nov 2026)
 
@@ -282,7 +282,7 @@ Non-code; each item has an owner and evidence filed with the go/no-go pack.
 - 14.5 Rollback drill: previous build deployable, store compatible both ways, seqnum hand-over rehearsed.
 - 14.6 Hypercare roster (08:30–15:30, two weeks) and day-1 EOD reconciliation with zero unexplained breaks.
 
-### Phase 15 — Store throughput · **high** · `quickfix` · 15.2–15.4 builds wait for Q18
+### Phase 15 — Store throughput · **high** · `quickfix` · Q18 decided: 15.6 and 15.7
 
 Added 13 Nov 2026 (Q1: "if the sync costs too much speed, we look at it again"). Profile of
 `krx_bench` (Mac M4 Max, one sender, `sample`): mem 240 k, file 64 k, file + sync 25 k msg/s. The
@@ -325,7 +325,23 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   threads sending on one session: `krx_bench` gets a `senders=N` option. The spike measures 1, 2,
   4 and 8 senders and lists the risks.
 - 15.5 Decide with the owner (Q18) from the 15.3 and 15.4 numbers and risks, then build the choice
-  red first (rows 15.7–15.11), with 15.2 if it still pays.
+  red first (rows 15.7–15.11), with 15.2 if it still pays. *Decided 14 Nov 2026 (Q18): neither 15.3
+  nor 15.4; 15.6 and 15.7 instead. Rows 15.7–15.11 are dropped with them.*
+- 15.6 Background flush, for `FileStoreSync=N` (Q18): `send()` stays as in file mode (no sync); a
+  flusher thread per store runs `fdatasync` on the body and seqnums every `FileStoreFlushInterval`
+  ms (new setting; proposed default 5), so a host crash loses at most about one interval plus one
+  sync of messages instead of the kernel's 30 s. Not `sync_file_range` or kernel writeback tuning:
+  they stop at the drive's volatile cache. A failed flush fails closed (error event, disconnect), as
+  a failed write does (D7). Spike first, measured on the Rocky pod (speed, per-message latency, the
+  real window at 1, 5, 10 ms), then red first (rows 15.12–15.14). Still loses up to one window of
+  sent messages on power loss: the crash runbook (Q1) keeps the seqnum fix with HOSE and the order
+  reconciliation, for fewer orders.
+- 15.7 Batch send, for `FileStoreSync=Y` (Q18): `Session::sendToTargetBatch` (and the quickfix-rs
+  binding) stores a batch under one hold of the session lock without a sync, syncs once, then writes
+  the batch to the socket in seqnum order, and reports per message whether it went out (the spike
+  returns all or none). No extra thread; `send()` keeps its meaning and its per-message sync. The
+  gateway drains each session's order queue into one call from one sender thread, never waiting to
+  fill a batch, at most `MAX_BATCH` (proposed 64) a call (Phase 10). Red first (rows 15.15–15.17).
 
 **Spike results (13 Nov 2026, U-17; numbers in `test/krx/BASELINE.md`).** Measured on Linux in the
 lab cluster (a pod in namespace `krx-bench`, store on a node's consumer NVMe) and on the Mac with
