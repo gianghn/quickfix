@@ -637,8 +637,12 @@ SCENARIO("A reconnect while the acceptor stops waits for the session's connectio
 }
 
 namespace {
-// Whether the gateway closed `socket` (or never took it) within `timeout`: EOF or an error.
+// Whether the gateway closed `socket` (or never took it) within `timeout`: EOF or an error. One
+// byte goes out first: Linux can drop a connection whose handshake ended as the listener closed
+// and reset it only when it hears from the client (CI, Rocky 9: 1 in 100 rounds); a connection the
+// gateway still holds reads the byte and stays open.
 bool ClosedWithin(FIX::socket_handle socket, std::chrono::milliseconds timeout) {
+  FIX::socket_send(socket, "x", 1);
   pollfd ready{.fd = socket, .events = POLLIN, .revents = 0};
   if (poll(&ready, 1, static_cast<int>(timeout.count())) <= 0) {
     return false;
