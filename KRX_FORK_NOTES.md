@@ -120,6 +120,10 @@ Mutation scores come with the Mull job (plan item 1.7).
 - **`HttpServer` closes each accepted socket two or three times** (quickfix/quickfix#747, PRs
   #748, #750, #763, #766, none merged). It only runs when a config sets `HttpAcceptPort`; no
   gateway config does (checked 2026-11-09).
+- **Echo-on chaos runs that did not get back in step** (Phase 8, lab cluster, `26f4e4c2`): 5 of 20
+  runs were still 0.2–0.8 M orders behind after the 300 s settle and one initiator stop took over
+  15 s, on nodes short of CPU. Seed 5 passed locally; the cause is not known yet. The next echo-on
+  round runs with `--file-log` to trace it (`test/krx/BASELINE.md`).
 - Everything else known is in the plan: P0-1 … P0-11, P1-1 … P1-13 and the rest of P2.
 
 ## Other work outside this repo

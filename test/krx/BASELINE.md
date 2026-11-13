@@ -89,3 +89,32 @@ folder. Earlier full runs overstated the score: once a mutant left a corrupt sto
 | `ut` | 454 | 218 | 51 % |
 
 Owner, 13 Nov 2026 (Q10): report only; the score may not drop between releases.
+
+## Chaos and long runs (Phase 8), lab Kubernetes cluster
+
+`krx_stress` (`src/C++/test/krx/Stress.cpp`) runs on the lab cluster (owner decision Q12): RKE2,
+3 × 16 CPU, namespace `krx-soak` with its own quota. `test/krx/k8s/run.sh start NAME VARIANT RUNS
+PARALLEL -- ARGS` starts one Indexed Job per suite and one pod per seed (seed = pod index + 1);
+each pod clones the commit and builds its variant (Release, ASan+UBSan, TSan). `run.sh results
+NAME` prints one line per seed. "N of M finished" counts only the runs that ended before
+the batch was replaced. A chaos run: 90 s, 4 sessions, 3 sender threads each, chaos steps
+every 150–500 ms; `--no-echo` (orders only) or echo on (the acceptor echoes every order: both sides
+resend at once after an outage). PASS means both sides in step after the settle, LOST = DUP = OOO =
+UNEXPECTED = 0, no canary file descriptor closed, and every stop within its limit (15 s; 60 s
+under a sanitizer).
+
+| Round (commit) | Release | Release, echo on | ASan+UBSan | TSan | Found → fixed |
+|---|---|---|---|---|---|
+| 1 (`ed96f5e5`, `f824dbca`) | 13 of 15 finished PASS | 14 of 18 finished PASS | 20 of 20 | 3 of 15 | TSan: two reading threads on one acceptor session, across acceptor stops (#59) |
+| 2 (`a7532eaa`) | 19 of 20 | 16 of 20 | 20 of 20 | 4 of 15 | TSan: `disconnect()` from another thread raced the reset flags and resend range (#59); OOM: the resend yield and the unbounded queue (Q15, Q16, #60) |
+| 3 (`8f1102f7`) | 20 of 20 | 3 of 20 | 18 of 20 finished PASS | 12 of 15 | 1–3 single orders lost per run with both sides in step: a Logout or Reject above a gap (#60) |
+| 4 (`6eae9940`) | 17 of 20 (3 without a result) | 18 of 20 | 20 of 20 | 15 of 15 | 2 initiator stops over 15 s: the backlog read while sending was processed after the shutdown (#61) |
+| 5 (`26f4e4c2`) | 20 of 20 | 13 of 20 | 15 of 20 (5 without a result) | 15 of 15 | echo on: 5 runs not back in step within 300 s (seeds 5, 11, 18, 19, 20; 0.2–0.8 M orders behind), 1 stop over 15 s (seed 17), on nodes short of CPU; seed 5 passed locally. Open |
+| final (`784e1b0c`) | running | running | running | running | 8.3's final batch; 8.4's TSan 1 h × 10 runs beside it |
+
+Also on the research's engine (`25273cc3`, today's harness, ASan): 0 of 10, each stopped first on a
+memory error fixed in Phases 2–6, so the research's gap itself was not seen again.
+
+Local numbers (Release, Apple Silicon Mac): a resend of 2000 messages while three senders flood
+the session took 20,083 ms before Q15 and 9 ms after. Echo-on seed 16 after Q15 and Q16: PASS,
+2.14 M orders each way, peak RSS 1.1 GB (mostly the harness's own per-message records).

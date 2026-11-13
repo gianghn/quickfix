@@ -2,7 +2,7 @@
 
 One row per rule of [V1_PLAN.md](V1_PLAN.md). Tick a row only when its scenario passes in Release,
 ASan+UBSan and TSan. Every Phase 2–7 row must fail on `25273cc3` first; its red output goes in the
-phase handover.
+phase handover. `[~]` marks a row whose code is merged while its long run is still going.
 
 Who is who: **the gateway** is DNSE's KRX gateway on this engine; **the exchange** is HOSE/KRX (a
 simulator in tests); **a sender** is a gateway thread placing orders; **an operator** watches the
@@ -165,11 +165,12 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] U-2 | Baseline recorded: red list, bench p50/p99/p99.9, Mull scores | 1.8 |
 | [ ] U-15 | CI's sanitize job is green: ASan+UBSan+LSan and TSan over `ut`, `krx_ut`, acceptance (+ threaded under ASan) | 1.5 |
 | [ ] U-3 | `cpp-policy-check .` (house policy, fork mode) passes before every PR, its result in the PR | 1.6 |
-| [ ] U-4 | P0-10 root cause written down; 50+ seeded chaos runs end with LOST = 0 and every gap explained | 8.1–8.3 |
-| [ ] U-5 | TSan stress ≥ 1 h on each of 10 seeds: zero unsuppressed reports | 8.4 |
-| [ ] U-6 | Echo-on chaos 20 runs with no hang; Release soak ≥ 8 h with LOST = DUP = OOO = 0 and flat RSS and fds | 8.5 |
-| [ ] U-7 | libFuzzer ≥ 24 CPU-h per mode and stateful session fuzzing 24 CPU-h, no crash | 8.6 |
-| [ ] U-8 | Shutdown under load: 100 iterations, each exits within 15 s | 8.7 |
+| [~] U-4 | P0-10 root cause written down; 50+ seeded chaos runs end with LOST = 0 and every gap explained. Root cause in `KRX_FORK_NOTES.md` and `[u-4]` scenarios (#59–#60); the final 55-run batch on `784e1b0c` is running (BASELINE.md) | 8.1–8.3 |
+| [ ] U-5 | TSan stress ≥ 1 h on each of 10 seeds: zero unsuppressed reports. Running on the lab cluster | 8.4 |
+| [~] U-6 | Echo-on chaos 20 runs with no hang; Release soak ≥ 8 h with LOST = DUP = OOO = 0 and flat RSS and fds. The livelock fix and `[u-6]` are merged (#58); 20 echo-on runs and the 8 h soak run on the lab cluster | 8.5 |
+| [ ] U-7 | libFuzzer ≥ 24 CPU-h per mode and stateful session fuzzing 24 CPU-h, no crash. Running on the lab cluster; stateful session fuzzing is not built yet | 8.6 |
+| [~] U-8 | Shutdown under load: 100 iterations, each exits within 15 s. `[u-8]` scenarios merged (#57, #61); every stop in `krx_stress` is held to 15 s, counted over the final batch (BASELINE.md) | 8.7 |
+| [x] U-16 | At most `MaxQueuedMessages` (10,000 by default, 0 = no limit) wait above a gap; the rest are dropped with a "Queue full" error event and come back with the resend (`[u-9]` scenarios, `ut` `SessionStateTests` and `AcceptorSessionTestCase`) | 8.3, Q16 |
 | [x] U-9 | FileStore sync cost measured (p50/p99.9, on and off): `test/krx/BASELINE.md` (a Mac; production disk in 11.7) | 4.4 |
 | [ ] U-10 | `cargo-mutants` on the quickfix-rs callback module: no surviving mutant on the panic path | 9.5 |
 | [ ] U-11 | Performance baseline on production-like hardware, 2× peak full-day soak, ATO/ATC burst replay | 11.7, 11.8 |
