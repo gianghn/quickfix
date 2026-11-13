@@ -167,13 +167,17 @@ public:
   void logoutReason( const std::string& value ) 
   { Locker l( m_mutex ); m_logoutReason = value; }
 
-  // KRX fork (U-9, Q16): at most MAX_QUEUED messages wait above a gap; false when this one was
-  // dropped instead (the open ResendRequest asks up to the latest, so it comes back).
-  static constexpr std::size_t MAX_QUEUED = 10000;
+  // KRX fork (U-9, Q16): at most maxQueued() messages wait above a gap (MaxQueuedMessages, 10000
+  // by default, 0 for no limit); false when this one was dropped instead (the open ResendRequest
+  // asks up to the latest, so it comes back).
+  int maxQueued() const { return m_maxQueued.load(); }
+  void maxQueued( int value ) { m_maxQueued.store( value ); }
   bool queue( int msgSeqNum, const Message& message )
   {
     const Locker l( m_mutex );
-    if ( m_queue.size() >= MAX_QUEUED && m_queue.find( msgSeqNum ) == m_queue.end() )
+    const int cap = m_maxQueued.load();
+    if ( cap > 0 && m_queue.size() >= static_cast<std::size_t>( cap )
+         && m_queue.find( msgSeqNum ) == m_queue.end() )
       return false;
     m_queue[ msgSeqNum ] = message;
     return true;
@@ -252,6 +256,7 @@ private:
   ResendRange m_resendRange;
   HeartBtInt m_heartBtInt;
   std::atomic<int64_t> m_lastSentTime;
+  std::atomic<int> m_maxQueued{ 10000 };
   UtcTimeStamp m_lastReceivedTime;
   std::string m_logoutReason;
   Messages m_queue;

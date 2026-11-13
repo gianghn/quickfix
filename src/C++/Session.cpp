@@ -1405,7 +1405,7 @@ void Session::doTargetTooHigh( const Message& msg )
   // every thousandth, until the next disconnect.
   if ( !m_state.queue( msgSeqNum, msg ) && ++m_queueDropped % 1000 == 1 )
   {
-    const std::string event = "Queue full (" + IntConvertor::convert( static_cast<int>( SessionState::MAX_QUEUED ) )
+    const std::string event = "Queue full (" + IntConvertor::convert( m_state.maxQueued() )
       + " messages): dropped MsgSeqNum " + IntConvertor::convert( msgSeqNum ) + ", "
       + IntConvertor::convert( m_queueDropped ) + " so far; the resend brings them";
     m_state.onEvent( event );

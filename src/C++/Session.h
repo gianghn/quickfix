@@ -168,6 +168,11 @@ public:
   int getHeartBtInt();
   void setSendTimeoutMs ( int value )
     { m_sendTimeoutMs = value; }
+  // KRX fork (U-9, Q16): how many messages may wait above a gap (MaxQueuedMessages); 0 no limit.
+  int getMaxQueuedMessages() const
+    { return m_state.maxQueued(); }
+  void setMaxQueuedMessages ( int value )
+    { m_state.maxQueued( value ); }
 
   int getLogoutTimeout()
     { return m_state.logoutTimeout(); }

@@ -822,6 +822,46 @@ SCENARIO("A Reject above a gap leaves the missing message to the resend",
   }
 }
 
+// Row U-9 (Q16): the cap is the MaxQueuedMessages setting; 0 is no limit, as upstream.
+SCENARIO("The MaxQueuedMessages setting caps the queue above a gap", "[krx][v1][security][u-9]") {
+  GIVEN("an acceptor session configured with MaxQueuedMessages=5") {
+    FIX::Dictionary settings;
+    settings.setString("ConnectionType", "acceptor");
+    settings.setBool("UseDataDictionary", false);
+    settings.setString("StartTime", "00:00:00");
+    settings.setString("EndTime", "00:00:00");
+    settings.setInt("MaxQueuedMessages", 5);
+    krx::LogonWatcher application;
+    FIX::MemoryStoreFactory stores;
+    FIX::SessionFactory factory(application, stores, nullptr);
+    const FIX::SessionID id(FIX::BeginString("FIX.4.4"), FIX::SenderCompID("KRXGW"),
+                            FIX::TargetCompID("KRXMQM"));
+    FIX::Session* session = factory.create(id, settings);
+    THEN("at most 5 messages wait above a gap") {
+      const int cap = session->getMaxQueuedMessages();
+      factory.destroy(session);
+      REQUIRE((cap == 5));
+    }
+  }
+}
+
+SCENARIO("A queue refuses messages past its cap, and 0 means no limit", "[krx][v1][u-9]") {
+  GIVEN("a session state") {
+    FIX::SessionState state(FIX::UtcTimeStamp::now());
+    WHEN("its cap is 2 and three messages arrive, then the cap is 0 and one more arrives") {
+      state.maxQueued(2);
+      const bool first = state.queue(3, FIX::Message());
+      const bool second = state.queue(4, FIX::Message());
+      const bool third = state.queue(5, FIX::Message());
+      state.maxQueued(0);
+      const bool fourth = state.queue(6, FIX::Message());
+      THEN("the third is refused and the fourth is kept") {
+        REQUIRE((first && second && !third && fourth));
+      }
+    }
+  }
+}
+
 SCENARIO("A signal storm on an idle session causes no disconnect", "[krx][v1][security][p1-3]") {
   GIVEN("a logged-on, idle session") {
     InstallInterruptingHandler();

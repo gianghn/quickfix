@@ -84,6 +84,7 @@ const char LOGON_TIMEOUT[] = "LogonTimeout";
 const char LOGOUT_TIMEOUT[] = "LogoutTimeout";
 // KRX fork (P0-3): seconds one message may take to send; default half of HeartBtInt.
 constexpr const char* SEND_TIMEOUT = "SendTimeout";
+constexpr const char* MAX_QUEUED_MESSAGES = "MaxQueuedMessages";  // KRX fork (U-9, Q16)
 const char FILE_STORE_PATH[] = "FileStorePath";
 // KRX fork (P0-5): Y forces the store's files to disk before a send returns (default N).
 constexpr const char* FILE_STORE_SYNC = "FileStoreSync";
