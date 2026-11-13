@@ -103,6 +103,50 @@ The Mac with a sync delay added (`KRX_SYNC_DELAY_US`, a stand-in for a slower di
 1 ms, sync 704 msg/s, 1a 95,331, 1b 697 / 1,545 / 2,862 at 1 / 4 / 8 senders; at 200 µs, sync
 3,164, 1a 88,273, 1b 3,159 / 6,855 / 13,285.
 
+## Rocky Linux 9, lab cluster, 13 Nov 2026 (plan items 15.1, 15.3, 15.4; U-16, U-17)
+
+The production OS's userspace: a `rockylinux:9` (9.3) pod, GCC 13.3 (gcc-toolset-13, as CI's
+Rocky job), on `rke2-node1`, a quieter node; the store on that node's NVMe (ext4). A container
+shares its node's kernel, so this is Ubuntu's kernel 7.0 and ext4, not Rocky 9's 5.14 and XFS:
+11.7 still measures the production host. Same runs as the Linux section above, medians.
+
+| Store | msg/s before → after 15.1 | RTT p50 µs | p99 µs | p99.9 µs |
+|---|---|---|---|---|
+| file, sync off | 137,718 → 253,809 | 38.7 → 30.5 | 76.0 → 56.0 | 377.9 → 346.7 |
+| file, `FileStoreSync=Y` | 1,474 → 1,504 | 1,394 → 1,332 | 2,145 → 1,724 | 2,708 → 1,908 |
+
+On the quiet node 15.1 makes no percentile worse (D9 holds; the Ubuntu run's p99.9 was the busy
+node).
+
+| Senders | sync msg/s | 1a msg/s | 1b msg/s | RTT p50 µs sync / 1a / 1b |
+|---|---|---|---|---|
+| 1 | 1,554 | 244,526 | 1,422 | 1,297 / 1,394 / 1,395 |
+| 4 | 1,555 | 183,378 | 3,131 | 1,325 / 1,299 / 1,420 |
+| 8 | 1,521 | 87,470 | 6,106 | 1,298 / 1,437 / 1,391 |
+| 16 | 1,523 | 105,412 | 11,302 | 1,280 / 1,387 / 1,460 |
+
+Where a message's time goes (the spike's `KRX_STEP_STATS` timers; `strace` is blocked by the
+node's AppArmor), mean µs per message:
+
+| Step | file, 1 sender | sync, 1 sender | 1a, 1 sender | 1a, 8 senders | 1b, 8 senders |
+|---|---|---|---|---|---|
+| session lock wait | 0.02 | 0.05 | 0.06 | 39.3 | 16.6 |
+| build (toApp, toString) | 0.44 | 1.5 | 0.78 | 0.99 | 2.4 |
+| body write | 0.36 | 3.6 | 1.6 | 1.9 | 7.8 |
+| body sync (in `send()`) | — | 612.9 | — | — | — |
+| header write | 0.27 | 3.2 | 0.51 | 0.71 | 1.7 |
+| seqnums write (sent) | 0.31 | 1.8 | 0.67 | 0.78 | 1.8 |
+| socket write | 1.23 | 7.8 | (flusher) | (flusher) | (flusher) |
+| **`send()` total** | **3.4** | **636.3** | **6.8** | **47.9** | **959.6** |
+| flusher: sync per batch | — | — | 627.1 | 635.0 | 615.9 |
+
+Sync mode is 96 % `fdatasync`; the engine's own work is about 20 µs. 1a's senders never wait for
+the disk; with 8 of them, 82 % of `send()` is waiting for the session lock, which is why 1a
+is slower at 8–16 senders than at 1. 1b's senders wait about 1.5 syncs (the one in progress, then
+theirs). `perf`: sync mode uses 0.25 CPU over 8 s (the process waits for the disk), file mode
+0.57; the engine's top functions are dictionary validation (2–5 %) and time formatting (about
+4 %).
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

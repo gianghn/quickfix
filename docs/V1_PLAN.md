@@ -357,6 +357,11 @@ outside the session lock until its message went out.
   0.7 × senders × today; a single sender gains nothing (slightly slower: a thread hand-off). Risks:
   the same second thread and teardown work as 1a; the gateway must send from many threads per
   session to see any gain (to check with the gateway's design).
+- **Rocky Linux 9** (userspace in a pod on the node's kernel and NVMe): the same picture. Sync mode
+  about 1,500 msg/s, 96 % of each `send()` in `fdatasync` (613 of 636 µs), the engine's own work
+  about 20 µs; 1a 87 k–245 k msg/s; 1b 1.4 k / 3.1 k / 6.1 k / 11.3 k at 1 / 4 / 8 / 16 senders.
+  With 8 senders 1a waits 82 % of `send()` for the session lock, so its best case is one sender.
+  15.1 on the quiet node: file 138 k → 254 k msg/s, no percentile worse.
 - Not measured: a batch send API (`sendToTarget` of several messages, one sync) would give a
   single gateway thread 1a's batching with 1b's meaning; it changes the quickfix-rs binding.
 
