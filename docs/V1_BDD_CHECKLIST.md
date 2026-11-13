@@ -91,21 +91,21 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 |---|---|---|
 | [x] 6.1 | Many senders while the connection drops raise no TSan report and no use-after-free | 6.1, 6.2 |
 | [x] 6.2 | A dropped connection always clears the session's logon state | 6.1 |
-| [ ] 6.3 | The threaded acceptance suite raises no unsuppressed TSan report | 6.3 |
-| [ ] 6.4 | `onLogout` runs after the session lock is released | 6.4 |
-| [ ] 6.5 | Repeated forced and graceful acceptor stops never hang and never close a foreign file | 6.5 |
-| [ ] 6.6 | A connection that fails to attach to its session leaves the session free for the next one | 6.6 |
+| [x] 6.3 | The threaded acceptance suite raises no unsuppressed TSan report | 6.3 |
+| [x] 6.4 | `onLogout` runs after the session lock is released | 6.4 |
+| [x] 6.5 | Repeated forced and graceful acceptor stops never hang and never close a foreign file | 6.5 |
+| [x] 6.6 | A connection that fails to attach to its session leaves the session free for the next one | 6.6 |
 
 ## 7. Upstream picks — Phase 7 (src/C++/test/krx/UpstreamPicksScenarios.cpp, plus upstream tests)
 
 | # | Scenario | Plan |
 |---|---|---|
-| [ ] 7.1 | A GapFill leaves no skipped message waiting in the queue | 7.1 |
-| [ ] 7.2 | A field map moved onto itself or onto a map with groups keeps its contents without leaking | 7.2 |
-| [ ] 7.3 | A NonStopSession keeps its seqnums across a restart (only if Q5 = yes) | 7.3 |
-| [ ] 7.4 | A TLS session survives certificate rotation and more than 1,024 open files (only if built-in TLS) | 7.4 |
-| [ ] 7.5 | Nested repeating groups with correct counts pass validation | 7.6 |
-| [ ] 7.6 | Session settings for validation also apply to the default dictionary | 7.6 |
+| [x] 7.1 | A GapFill leaves no skipped message waiting in the queue | 7.1 |
+| [x] 7.2 | A field map moved onto itself or onto a map with groups keeps its contents without leaking | 7.2 |
+| [–] 7.3 | A NonStopSession keeps its seqnums across a restart (only if Q5 = yes) — not needed: Q5 = no | 7.3 |
+| [–] 7.4 | A TLS session survives certificate rotation and more than 1,024 open files (only if built-in TLS) — not needed: Q6 = no TLS | 7.4 |
+| [x] 7.5 | Nested repeating groups with correct counts pass validation | 7.6 |
+| [x] 7.6 | Session settings for validation also apply to the default dictionary | 7.6 |
 
 ## 9. quickfix-rs — Phase 9 (gianghn/quickfix-rs: quickfix/tests/test_callback_panic.rs)
 

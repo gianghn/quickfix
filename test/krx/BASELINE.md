@@ -78,3 +78,14 @@ together (`test/krx/mutation-tests.sh`), 11 Nov 2026, Linux aarch64 in Docker:
 `krx_ut` alone killed 24 %. The nightly CI run (`mutation` job) adds the mutants read from `ut`
 and reports both; per-function scores and the surviving mutants are in its annotations. The PR gate
 is 80 % on the lines a PR changes.
+
+Full run on `agent/v1-fix-mull-store` (#45, 13 Nov 2026), the first with each `ut` run in its own
+folder. Earlier full runs overstated the score: once a mutant left a corrupt store file in
+`test/store`, every later run of `ut` crashed and Mull counted that as a kill.
+
+| Mutants read from | Mutants | Survived | Score |
+|---|---|---|---|
+| `krx_ut` | 513 | 253 | 50 % |
+| `ut` | 454 | 218 | 51 % |
+
+Owner, 13 Nov 2026 (Q10): report only; the score may not drop between releases.
