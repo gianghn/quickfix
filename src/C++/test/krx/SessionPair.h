@@ -182,18 +182,42 @@ class SeqNumFailingStore : public FIX::MessageStore {
   std::atomic<bool> fail_{false};
 };
 
+// A FileStore with sync on whose syncs fail once FailSyncs() was called, as a disk that starts
+// returning EIO would (row 15.16).
+class SyncFailingFileStore : public FIX::FileStore {
+ public:
+  SyncFailingFileStore(const FIX::UtcTimeStamp& now, const std::string& dir,
+                       const FIX::SessionID& id)
+      : FIX::FileStore(now, dir, id, true) {}
+
+  void FailSyncs() { fail_ = true; }
+
+ protected:
+  bool syncFile(int fd) override { return !fail_.load() && FIX::FileStore::syncFile(fd); }
+
+ private:
+  std::atomic<bool> fail_{false};
+};
+
 // Keeps the one store it creates, so a test can seed it before the session runs: a MemoryStore, or
-// a FileStore in `file_dir` when that is not empty (syncing to disk when `sync`).
+// a FileStore in `file_dir` when that is not empty (syncing to disk when `sync`; every sync failing
+// when `sync_fails`).
 class KeptStoreFactory : public FIX::MemoryStoreFactory {
  public:
-  explicit KeptStoreFactory(std::string file_dir = "", bool sync = false, bool seqnum_fails = false)
-      : file_dir_(std::move(file_dir)), sync_(sync), seqnum_fails_(seqnum_fails) {}
+  explicit KeptStoreFactory(std::string file_dir = "", bool sync = false, bool seqnum_fails = false,
+                            bool sync_fails = false)
+      : file_dir_(std::move(file_dir)),
+        sync_(sync),
+        seqnum_fails_(seqnum_fails),
+        sync_fails_(sync_fails) {}
 
   [[nodiscard]] FIX::MessageStore* Store() const { return store_; }
 
   FIX::MessageStore* create(const FIX::UtcTimeStamp& now, const FIX::SessionID& id) override {
     if (seqnum_fails_) {
       store_ = std::make_unique<SeqNumFailingStore>(now).release();
+    } else if (sync_fails_) {
+      store_ = std::make_unique<SyncFailingFileStore>(now, file_dir_, id).release();
     } else {
       store_ = file_dir_.empty() ? FIX::MemoryStoreFactory::create(now, id)
                                  : FIX::FileStoreFactory(file_dir_, sync_).create(now, id);
@@ -205,6 +229,7 @@ class KeptStoreFactory : public FIX::MemoryStoreFactory {
   std::string file_dir_;
   bool sync_;
   bool seqnum_fails_;
+  bool sync_fails_;
   FIX::MessageStore* store_{nullptr};
 };
 
@@ -218,6 +243,7 @@ struct PairOptions {
   std::string file_store_dir;   // a FileStore in this directory instead of a MemoryStore
   bool file_store_sync{false};  // that FileStore syncs to disk (FileStoreSync=Y)
   bool seqnum_fails{false};     // a SeqNumFailingStore (no FileStore)
+  bool sync_fails{false};       // a SyncFailingFileStore in file_store_dir (sync on)
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
@@ -274,6 +300,9 @@ class SessionPair {
 
   // The gateway sends `message` (its MsgType set), from whichever thread calls this.
   bool Send(FIX::Message message) { return session_.send(message); }
+
+  // The gateway sends `messages` as one batch (15.7): how many went out, from the first.
+  std::size_t SendBatch(std::vector<FIX::Message>& messages) { return session_.send(messages); }
 
   // The gateway disconnects the session, as on stop() or a risk limit.
   void Disconnect() { session_.disconnect(); }

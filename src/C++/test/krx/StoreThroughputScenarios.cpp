@@ -5,6 +5,8 @@
 // Rows 15.12-15.14 (item 15.6, Q18): with store sync off, FileStoreFlushInterval makes a background
 // thread flush the store to disk; a failed flush fails the next write; destroying or resetting the
 // store stops the thread safely.
+// Rows 15.15-15.17 (item 15.7, Q18): with store sync on, a batch of orders is stored, synced once,
+// then written in order; a failed sync sends none; the result says how many went out.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -21,7 +23,9 @@
 #include "Exceptions.h"
 #include "FaultyFile.h"
 #include "FileStore.h"
+#include "FixFields.h"
 #include "SessionID.h"
+#include "SessionPair.h"
 #include "SessionSettings.h"
 #include "Utility.h"
 
@@ -136,6 +140,58 @@ std::string FirstWriteError(FIX::FileStore& store, int first) {
     std::this_thread::sleep_for(milliseconds(1));
   }
   return "";
+}
+
+constexpr std::chrono::seconds kWait{5};
+
+void LogOn(krx::SessionPair& pair) {
+  pair.Write(pair.Logon(1));
+  REQUIRE(pair.WaitLoggedOn(kWait));
+  REQUIRE((krx::MsgTypeOf(pair.ReadFrame(kWait)) == "A"));
+}
+
+// `count` orders from the gateway (BusinessMessageRejects stand in for them, as in the store rows),
+// each with a Text of `text_size` bytes.
+std::vector<FIX::Message> Orders(int count, std::size_t text_size = 200) {
+  std::vector<FIX::Message> orders(static_cast<std::size_t>(count));
+  for (FIX::Message& order : orders) {
+    order.getHeader().setField(FIX::MsgType("j"));
+    order.setField(FIX::RefMsgType("D"));
+    order.setField(FIX::BusinessRejectReason(0));
+    order.setField(FIX::Text(std::string(text_size, 'o')));
+  }
+  return orders;
+}
+
+// The MsgSeqNum (34) of a raw frame, or 0.
+int SeqNumOf(const std::string& frame) {
+  const std::size_t tag = frame.find("\00134=");
+  return tag == std::string::npos ? 0 : std::stoi(frame.substr(tag + 4));
+}
+
+// The frames the session sent, until none comes for `quiet`: the sequence numbers of the orders
+// (35=j) among them, in the order they arrived.
+std::vector<int> OrdersRead(krx::SessionPair& pair, milliseconds quiet) {
+  std::vector<int> seq_nums;
+  for (std::string frame = pair.ReadFrame(quiet); !frame.empty(); frame = pair.ReadFrame(quiet)) {
+    if (krx::MsgTypeOf(frame) == "j") {
+      seq_nums.push_back(SeqNumOf(frame));
+    }
+  }
+  return seq_nums;
+}
+
+// True when `seq_nums` is `first`, `first` + 1, ... with `count` numbers.
+bool Consecutive(const std::vector<int>& seq_nums, int first, std::size_t count) {
+  if (seq_nums.size() != count) {
+    return false;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (seq_nums[i] != first + static_cast<int>(i)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::string Contents(const std::filesystem::path& path) {
@@ -286,6 +342,77 @@ SCENARIO("A store destroyed or reset while its flusher runs opens again with wha
         const int wrong = FirstWrong(reopened, 1, 100);
         INFO("destroy took " << took.count() << " ms; first wrong: " << wrong);
         REQUIRE((took < kFlushedWithin && wrong == 0 && Read(reopened, 101) == "<missing>"));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync, a batch of orders costs one sync and reaches the exchange in order",
+         "[krx][v1][p15][batch]") {
+  GIVEN("a logged-on session whose file store syncs to disk") {
+    const krx::TempDir dir("store1515");
+    krx::PairOptions options;
+    options.file_store_dir = dir.Path().string();
+    options.file_store_sync = true;
+    krx::SessionPair pair("KRXB15", options);
+    LogOn(pair);
+    WHEN("the gateway sends five orders as one batch") {
+      std::vector<FIX::Message> orders = Orders(5);
+      const std::uint64_t syncs_before = SyncsOf(pair.Store());
+      const std::size_t sent = pair.SendBatch(orders);
+      const std::uint64_t syncs = SyncsOf(pair.Store()) - syncs_before;
+      const std::vector<int> read = OrdersRead(pair, milliseconds(200));
+      THEN("all five went out after one sync, whole and with consecutive sequence numbers") {
+        INFO("sent " << sent << ", syncs " << syncs << ", orders read " << read.size());
+        REQUIRE((sent == 5 && syncs == 1 && Consecutive(read, 2, 5)));
+      }
+    }
+  }
+}
+
+SCENARIO("With store sync, a batch whose sync fails sends none of its orders and disconnects",
+         "[krx][v1][p15][batch]") {
+  GIVEN("a logged-on session whose store's syncs start failing") {
+    const krx::TempDir dir("store1516");
+    krx::PairOptions options;
+    options.file_store_dir = dir.Path().string();
+    options.sync_fails = true;
+    krx::SessionPair pair("KRXB16", options);
+    LogOn(pair);
+    auto* store = dynamic_cast<krx::SyncFailingFileStore*>(pair.Store());
+    REQUIRE((store != nullptr));
+    store->FailSyncs();
+    WHEN("the gateway sends three orders as one batch") {
+      std::vector<FIX::Message> orders = Orders(3);
+      const std::size_t sent = pair.SendBatch(orders);
+      const std::vector<int> read = OrdersRead(pair, milliseconds(200));
+      THEN("none went out, an error is logged, and the session disconnects") {
+        const bool logged = pair.WaitForEvent("Store write failed", kWait);
+        const bool closed = pair.WaitClosed(kWait);
+        INFO("sent " << sent << ", orders read " << read.size() << "\n" << pair.Events().Dump());
+        REQUIRE((sent == 0 && read.empty() && logged && closed));
+      }
+    }
+  }
+}
+
+SCENARIO("When the connection fails mid-batch, the result says which orders went out",
+         "[krx][v1][p15][batch]") {
+  GIVEN("a logged-on session with a 300 ms send timeout, the exchange not reading") {
+    const krx::TempDir dir("store1517");
+    krx::PairOptions options;
+    options.file_store_dir = dir.Path().string();
+    options.file_store_sync = true;
+    options.send_timeout_ms = 300;
+    krx::SessionPair pair("KRXB17", options);
+    LogOn(pair);
+    WHEN("the gateway sends a batch of 5,000 orders of 1 KB, more than the socket holds") {
+      std::vector<FIX::Message> orders = Orders(5000, 1000);
+      const std::size_t sent = pair.SendBatch(orders);
+      const std::vector<int> read = OrdersRead(pair, milliseconds(500));
+      THEN("some but not all went out, and the exchange got exactly those, in order") {
+        INFO("sent " << sent << ", orders read " << read.size());
+        REQUIRE((sent > 0 && sent < 5000 && Consecutive(read, 2, sent)));
       }
     }
   }

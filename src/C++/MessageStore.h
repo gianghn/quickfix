@@ -84,6 +84,12 @@ public:
 
   virtual void reset( const UtcTimeStamp& now ) EXCEPT ( IOException ) = 0;
   virtual void refresh() EXCEPT ( IOException ) = 0;
+
+  // KRX fork (15.7, Q18): a batch send. Between beginBatch and endBatch a store that forces each
+  // message to disk may hold those syncs; endBatch forces everything stored since beginBatch to disk
+  // at once and is true once it is there. Stores that never sync need neither.
+  virtual void beginBatch() {}
+  virtual bool endBatch() { return true; }
 };
 /*! @} */
 

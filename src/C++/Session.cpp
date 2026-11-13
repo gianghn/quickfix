@@ -775,8 +775,52 @@ bool Session::sendRaw( Message& message, int num )
 bool Session::send( const std::string& string )
 {
   if ( !m_pResponder ) return false;
+  if ( m_batch ) // KRX fork (15.7): written by send( std::vector<Message>& ) once stored and synced
+  {
+    m_batch->push_back( string );
+    return true;
+  }
   m_state.onOutgoing( string );
   return m_pResponder->send( string );
+}
+
+std::size_t Session::send( std::vector<Message>& messages )
+{
+  ++m_mutexWaiters;  // KRX fork (P0-3): a long resend lets us in (generateRetransmits)
+  const Locker l( m_mutex );
+  --m_mutexWaiters;
+
+  // Store every message (sendRaw, with m_batch set: nothing is written yet), then make the batch
+  // durable once, then write it in order, all under m_mutex so no other message comes between.
+  std::vector<std::string> wire;
+  MessageStore* store = m_state.store();
+  store->beginBatch();
+  m_batch = &wire;
+  for ( Message& message : messages )
+  {
+    message.getHeader().removeField( FIELD::PossDupFlag );
+    message.getHeader().removeField( FIELD::OrigSendingTime );
+    if ( !sendRaw( message ) ) break;
+  }
+  m_batch = nullptr;
+  if ( !store->endBatch() )
+  {
+    // A named string: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
+    const std::string event = "Store write failed, disconnecting: unable to sync a batch to disk";
+    m_state.onEvent( event );
+    disconnect();
+    return 0;
+  }
+
+  std::size_t sent = 0;
+  for ( const std::string& string : wire )
+  {
+    if ( !m_pResponder ) break;
+    m_state.onOutgoing( string );
+    if ( !m_pResponder->send( string ) ) break;
+    ++sent;
+  }
+  return sent;
 }
 
 void Session::disconnect()
@@ -1659,6 +1703,15 @@ EXCEPT ( SessionNotFound )
   Session* pSession = lookupSession( sessionID );
   if ( !pSession ) throw SessionNotFound();
   return pSession->send( message );
+}
+
+std::size_t Session::sendToTarget( std::vector<Message>& messages, const SessionID& sessionID )
+EXCEPT ( SessionNotFound )
+{
+  Session* pSession = lookupSession( sessionID );
+  if ( !pSession ) throw SessionNotFound();
+  for ( Message& message : messages ) message.setSessionID( sessionID );
+  return pSession->send( messages );
 }
 
 bool Session::sendToTarget
