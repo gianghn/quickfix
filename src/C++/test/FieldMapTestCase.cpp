@@ -26,11 +26,28 @@
 
 #include <FieldMap.h>
 #include <Message.h>
+#include <memory>
 #include <vector>
 
 #include "catch_amalgamated.hpp"
 
 using namespace FIX;
+
+namespace
+{
+// KRX fork (P1-6): quickfix/quickfix#764's test helper.
+class DestructorCountingFieldMap : public FieldMap
+{
+public:
+  explicit DestructorCountingFieldMap( int& destructionCount )
+    : m_destructionCount( destructionCount ) {}
+
+  ~DestructorCountingFieldMap() override { ++m_destructionCount; }
+
+private:
+  int& m_destructionCount;
+};
+}
 
 TEST_CASE("FieldMapTests")
 {
@@ -169,5 +186,56 @@ TEST_CASE("FieldMapTests")
 
     CHECK(18 == actualTag18.getTag());
     CHECK("field18_new" == actualTag18.getString());
+  }
+
+  // KRX fork (P1-6): quickfix/quickfix#764's tests (self-assignment through a reference, so the
+  // compiler's self-assignment warnings stay quiet).
+  SECTION("copyAssignmentToSelfPreservesFieldsAndGroups")
+  {
+    FieldMap fieldMap;
+    fieldMap.setField( 1, "field1" );
+    fieldMap.addGroup( 10, FieldMap() );
+
+    const FieldMap& self = fieldMap;
+    fieldMap = self;
+
+    CHECK( "field1" == fieldMap.getField( 1 ) );
+    CHECK( 1U == fieldMap.groupCount( 10 ) );
+  }
+
+  SECTION("moveAssignmentReleasesExistingGroups")
+  {
+    int destinationGroupDestructions = 0;
+    int sourceGroupDestructions = 0;
+
+    {
+      FieldMap destination;
+      // addGroupPtr takes ownership of the raw pointer.
+      destination.addGroupPtr( 10, std::make_unique<DestructorCountingFieldMap>( destinationGroupDestructions ).release(), false );
+
+      FieldMap source;
+      source.addGroupPtr( 20, std::make_unique<DestructorCountingFieldMap>( sourceGroupDestructions ).release(), false );
+
+      destination = std::move( source );
+
+      CHECK( 1 == destinationGroupDestructions );
+      CHECK( 0U == destination.groupCount( 10 ) );
+      CHECK( 1U == destination.groupCount( 20 ) );
+    }
+
+    CHECK( 1 == sourceGroupDestructions );
+  }
+
+  SECTION("moveAssignmentToSelfPreservesFieldsAndGroups")
+  {
+    FieldMap fieldMap;
+    fieldMap.setField( 1, "field1" );
+    fieldMap.addGroup( 10, FieldMap() );
+
+    FieldMap& self = fieldMap;
+    fieldMap = std::move( self );
+
+    CHECK( "field1" == fieldMap.getField( 1 ) );
+    CHECK( 1U == fieldMap.groupCount( 10 ) );
   }
 }
