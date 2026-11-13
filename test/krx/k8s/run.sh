@@ -85,7 +85,16 @@ cmake -S /w/src -B /w/build -DCMAKE_BUILD_TYPE="$build_type" -DQUICKFIX_EXAMPLES
   >/w/build.log 2>&1 || { tail -50 /w/build.log; exit 2; }
 cmake --build /w/build --target krx_stress --parallel "$(nproc)" >>/w/build.log 2>&1 \
   || { tail -50 /w/build.log; exit 2; }
-exec /w/build/src/C++/test/krx/krx_stress "${args[@]}"
+rc=0
+/w/build/src/C++/test/krx/krx_stress "${args[@]}" || rc=$?
+# A failed run with --file-log: each session's last events, since the pod's disk goes with it.
+if [ "$rc" != 0 ] && [ -d "${args[5]:-/nonexistent}" ]; then
+  find "${args[5]}" -name '*.event.current.log' | sort | while read -r log; do
+    echo "== $log"
+    tail -n 150 "$log"
+  done
+fi
+exit "$rc"
 SCRIPT
 }
 
