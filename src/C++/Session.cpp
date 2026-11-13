@@ -559,7 +559,9 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
       if ( resend( msg ) )
       {
         if ( begin ) generateSequenceReset( begin, msgSeqNum );
-        send( msg.toString(messageString) );
+        // KRX fork (U-8): a connection's send that failed means it is going (stop() shut it down);
+        // the rest would fail too, and running through it kept stop() waiting.
+        if ( !send( msg.toString(messageString) ) && responder ) return;
         m_state.onEvent( "Resending Message: "
                          + IntConvertor::convert( msgSeqNum ) );
         begin = 0;
