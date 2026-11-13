@@ -43,6 +43,9 @@ class DataDictionaryProvider
 {
 public:
   DataDictionaryProvider() {}
+  // KRX fork (P0-8 support, quickfix/quickfix#755): the dictionary used when none is configured.
+  explicit DataDictionaryProvider( const DataDictionary& defaultDataDictionary )
+  : emptyDataDictionary( defaultDataDictionary ) {}
   DataDictionaryProvider( const DataDictionaryProvider& copy );
 
   const DataDictionary& getSessionDataDictionary(const BeginString& beginString) const

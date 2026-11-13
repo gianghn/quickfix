@@ -7,8 +7,11 @@
 // groups, and one moved onto a map with groups frees those groups.
 // Row 7.5 (P0-8 support, quickfix/quickfix#743): validation checks the count of a repeating
 // group nested in another (Parties' PartySubIDs), not only of top-level groups.
+// Row 7.6 (P0-8 support, quickfix/quickfix#755): a session without a data dictionary
+// (UseDataDictionary=N) validates with the validation settings it was given.
 #include <chrono>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -21,7 +24,10 @@
 #include "FixFields.h"
 #include "FixValues.h"
 #include "Message.h"
+#include "Session.h"
+#include "SessionFactory.h"
 #include "SessionPair.h"
+#include "SessionSettings.h"
 #include "fix44/NewOrderSingle.h"
 
 namespace {
@@ -118,6 +124,44 @@ SCENARIO("Nested repeating groups are validated by their counts", "[krx][v1][p0-
       THEN("the correct order passes and the miscounted one is refused") {
         REQUIRE_NOTHROW(Fix44().validate(correct));
         REQUIRE_THROWS_AS(Fix44().validate(miscounted), FIX::RepeatingGroupCountMismatch);
+      }
+    }
+  }
+}
+
+SCENARIO("Validation settings apply to a session without a data dictionary", "[krx][v1][p0-8]") {
+  GIVEN("a session with UseDataDictionary=N and ValidateFieldsHaveValues=N") {
+    FIX::NullApplication application;
+    FIX::MemoryStoreFactory store;
+    FIX::SessionFactory factory(application, store, nullptr);
+    std::istringstream text(
+        "[DEFAULT]\nConnectionType=acceptor\nUseDataDictionary=N\nStartTime=00:00:00\n"
+        "EndTime=00:00:00\nValidateFieldsHaveValues=N\n"
+        "[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGW\nTargetCompID=KRXNODICT76\n");
+    FIX::SessionSettings settings;
+    text >> settings;
+    const FIX::SessionID id("FIX.4.4", "KRXGW", "KRXNODICT76");
+    FIX::Session* session = factory.create(id, settings.get(id));
+    WHEN("it validates a Logon with an empty field") {
+      FIX::Message logon;
+      FIX::Header& header = logon.getHeader();
+      header.setField(FIX::BeginString("FIX.4.4"));
+      header.setField(FIX::MsgType("A"));
+      header.setField(FIX::SenderCompID("KRXNODICT76"));
+      header.setField(FIX::TargetCompID("KRXGW"));
+      logon.setField(11, "");
+      const FIX::DataDictionary& dictionary =
+          session->getDataDictionaryProvider().getSessionDataDictionary(
+              FIX::BeginString("FIX.4.4"));
+      bool refused = false;
+      try {
+        dictionary.validate(logon);
+      } catch (const FIX::NoTagValue&) {
+        refused = true;
+      }
+      factory.destroy(session);
+      THEN("the empty field is accepted, as configured") {
+        REQUIRE_FALSE(refused);
       }
     }
   }

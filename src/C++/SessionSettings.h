@@ -74,10 +74,11 @@ const char HOST_SELECTION_POLICY[] = "HostSelectionPolicy";
 const char HOST_SELECTION_POLICY_PRIORITY_START_OVER_INTERVAL[] = "HostSelectionPolicyPriorityStartOverInterval";
 const char RECONNECT_INTERVAL[] = "ReconnectInterval";
 const char VALIDATE_LENGTH_AND_CHECKSUM[] = "ValidateLengthAndChecksum";
-const char VALIDATE_FIELDS_OUT_OF_ORDER[] = "ValidateFieldsOutOfOrder";
-const char VALIDATE_FIELDS_HAVE_VALUES[] = "ValidateFieldsHaveValues";
-const char VALIDATE_USER_DEFINED_FIELDS[] = "ValidateUserDefinedFields";
-const char ALLOW_UNKNOWN_MSG_FIELDS[] = "AllowUnknownMsgFields";
+// KRX fork (#755 port): pointers, not arrays, so passing them does not decay an array.
+constexpr const char* VALIDATE_FIELDS_OUT_OF_ORDER = "ValidateFieldsOutOfOrder";
+constexpr const char* VALIDATE_FIELDS_HAVE_VALUES = "ValidateFieldsHaveValues";
+constexpr const char* VALIDATE_USER_DEFINED_FIELDS = "ValidateUserDefinedFields";
+constexpr const char* ALLOW_UNKNOWN_MSG_FIELDS = "AllowUnknownMsgFields";
 const char PRESERVE_MESSAGE_FIELDS_ORDER[] = "PreserveMessageFieldsOrder";
 const char LOGON_TIMEOUT[] = "LogonTimeout";
 const char LOGOUT_TIMEOUT[] = "LogoutTimeout";

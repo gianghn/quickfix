@@ -65,6 +65,8 @@ private:
   std::shared_ptr<DataDictionary> createDataDictionary(const SessionID& sessionID, 
                                                        const Dictionary& settings, 
                                                        const std::string& settingsKey) EXCEPT (ConfigError);
+  // KRX fork (P0-8 support, quickfix/quickfix#755)
+  static void applyValidationSettings( const Dictionary& settings, DataDictionary& dataDictionary );
 
   void processFixtDataDictionaries(const SessionID& sessionID, 
                                    const Dictionary& settings, 
