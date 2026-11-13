@@ -153,6 +153,7 @@ YAML
             - {name: VARIANT, value: "$variant"}
             - {name: STRESS_ARGS, value: "$stress_args"}
             - {name: ASAN_OPTIONS, value: "detect_leaks=1:detect_stack_use_after_return=1"}
+            - {name: LSAN_OPTIONS, value: "verbosity=1:log_threads=1"}
             - {name: UBSAN_OPTIONS, value: "print_stacktrace=1:halt_on_error=1"}
             - {name: TSAN_OPTIONS, value: "halt_on_error=1:second_deadlock_stack=1"}
             - name: NODE
