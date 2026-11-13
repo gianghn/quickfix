@@ -13,7 +13,7 @@
 // Usage: krx_stress [seconds=30] [sessions=4] [threads=4] [port=7700] [seed=1] [workdir]
 //                   [--no-echo] [--file-log] [--settle=<seconds, 120>] [--hang-grace=<seconds, 0>]
 //                   [--stop-limit=<seconds a stop may take, 15; more under a sanitizer>]
-//                   [--soak] [--rate=<orders/s per sender thread>] [--chaos-ms=<150>]
+//                   [--event-log] [--soak] [--rate=<orders/s per sender thread>] [--chaos-ms=<150>]
 //                   [--report=<seconds between progress lines, 5>]
 // A soak (plan item 8.5, hours): --soak --rate=200 --chaos-ms=5000 --report=60; each progress
 // line has the process RSS and open descriptors, which must stay flat.
@@ -82,6 +82,7 @@ struct Options {
   std::filesystem::path workdir = "stress_work";
   bool echo = true;
   bool file_log = false;
+  bool event_log = false;  // only each session's events (small, unlike --file-log)
   int settle_seconds = 120;
   int hang_grace_seconds = 0;
   int stop_limit_seconds = 15;  // plan item 8.7: every stop under load within 15 s
@@ -127,6 +128,8 @@ Options Parse(std::span<char*> args) {
       options.echo = false;
     } else if (text == "--file-log") {
       options.file_log = true;
+    } else if (text == "--event-log") {
+      options.event_log = true;
     } else if (text == "--soak") {
       options.soak = true;
     } else if (!SetIntFlag(text, options)) {
@@ -566,12 +569,74 @@ FIX::SessionSettings Settings(const Options& options, bool acceptor) {
   return {stream};
 }
 
+// --event-log: each session's events only, to <side>-log/<session>.event.current.log. FileLog also
+// writes every message: gigabytes in a minute of echo-on chaos, more than a pod's disk.
+class EventFileLog : public FIX::Log {
+ public:
+  explicit EventFileLog(const std::filesystem::path& path) : file_(path, std::ios::app) {}
+
+  void clear() override {}
+
+  void backup() override {}
+
+  void onIncoming(const std::string& /*message*/) override {}
+
+  void onOutgoing(const std::string& /*message*/) override {}
+
+  void onEvent(const std::string& text) override {
+    const std::scoped_lock lock(mutex_);
+    file_ << FIX::UtcTimeStampConvertor::convert(FIX::UtcTimeStamp::now(), 6) << " : " << text
+          << '\n';
+    file_.flush();
+  }
+
+ private:
+  std::mutex mutex_;
+  std::ofstream file_;
+};
+
+class EventFileLogFactory : public FIX::LogFactory {
+ public:
+  explicit EventFileLogFactory(std::filesystem::path folder) : folder_(std::move(folder)) {
+    std::filesystem::create_directories(folder_);
+  }
+
+  FIX::Log* create() override { return Open("GLOBAL"); }
+
+  FIX::Log* create(const FIX::SessionID& id) override {
+    std::string name = id.toString();
+    std::ranges::replace(name, ':', '-');
+    return Open(name);
+  }
+
+  void destroy(FIX::Log* log) override { const std::unique_ptr<FIX::Log> owned(log); }
+
+ private:
+  FIX::Log* Open(const std::string& name) {
+    return std::make_unique<EventFileLog>(folder_ / (name + ".event.current.log")).release();
+  }
+
+  std::filesystem::path folder_;
+};
+
+std::unique_ptr<FIX::LogFactory> MakeLog(const Options& options,
+                                         const FIX::SessionSettings& settings, bool acceptor) {
+  if (options.file_log) {
+    return std::make_unique<FIX::FileLogFactory>(settings);
+  }
+  if (options.event_log) {
+    return std::make_unique<EventFileLogFactory>(options.workdir /
+                                                 (acceptor ? "acceptor-log" : "initiator-log"));
+  }
+  return nullptr;
+}
+
 class Side {
  public:
   Side(const Options& options, bool acceptor)
       : settings_(Settings(options, acceptor)),
         store_(settings_),
-        log_(options.file_log ? std::make_unique<FIX::FileLogFactory>(settings_) : nullptr) {}
+        log_(MakeLog(options, settings_, acceptor)) {}
 
   template <class Engine>
   std::unique_ptr<Engine> Make(FIX::Application& application) {
@@ -584,7 +649,7 @@ class Side {
  private:
   FIX::SessionSettings settings_;
   FIX::FileStoreFactory store_;
-  std::unique_ptr<FIX::FileLogFactory> log_;
+  std::unique_ptr<FIX::LogFactory> log_;
 };
 
 struct Rig {
