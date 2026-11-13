@@ -87,7 +87,7 @@ jobs:
           build/krx/src/C++/test/krx/krx_ut
 
   # Plan item 1.5: the same suites under the sanitizers, GCC on Linux, no suppressions. The first
-  # report fails the job. Threaded acceptance runs under ASan only: under TSan it is row 6.3.
+  # report fails the job. Threaded acceptance runs under both (TSan: row 6.3, since Phase 6).
   sanitize:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -136,7 +136,6 @@ jobs:
           trap 'kill $!' EXIT
           ruby -I. Runner.rb 127.0.0.1 6666 definitions/server/fix44/*.def
       - name: Threaded acceptance tests (FIX.4.4)
-        if: matrix.sanitizer == 'address'
         working-directory: ./test
         timeout-minutes: 30
         run: |

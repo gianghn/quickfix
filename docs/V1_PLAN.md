@@ -92,7 +92,7 @@ The owner may change any of these before its phase starts.
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | done (#25–#35); 3.8 (benchmark) later |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | done (#36–#41); the crash runbook (Q1) to write |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
-| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | building: 6.1 and 6.2 (#46), 6.4 (#47), 6.5 (#48), 6.6 (#49); 6.3 done early (#28, #29), its TSan row (threaded acceptance under TSan in CI) next |
+| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | built, waiting for merge: 6.1 and 6.2 (#46), 6.4 (#47), 6.5 (#48), 6.6 (#49), 6.3's TSan row (#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | not started |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
@@ -109,7 +109,7 @@ The owner may change any of these before its phase starts.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
 5. ~~Phase 3 handover~~ written (Handover 3, in #35).
-6. Phase 6 (6.1, 6.2, 6.4–6.6; 6.3 is done) and Phase 8: no owner question blocks them.
+6. ~~Phase 6~~ built (#46–#50, Handover 6). **Owner:** merge #45, then #46–#50 in order. Next: Phase 7 (upstream picks) or Phase 8 (gap root cause, long runs; 8.7 also takes the initiator's stop order and `onStop` spin): no owner question blocks them.
 7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
 ## Phases
@@ -380,3 +380,35 @@ logged as an error too ("every outbound", row 5.4); the error is one event with 
 **Left for the owner and the gateway (Phase 10):** the gateway refuses PossDup orders in `toApp`
 (Q2), drops duplicate ExecIDs (option B), alerts on `ERROR: sent` events (Q3), and its
 dictionary covers `FIX44KRX.xml` (Q3).
+
+### Handover 6 — 13 Nov 2026
+
+**Built:** 6.1 a connection that closed itself now ends its session through `disconnect()`
+(`Session::releaseResponder`, called from `read()`), `setResponder` takes the session lock, and
+the initiator attaches a connection only once connected (#46); 6.2 was already done (atomic
+`m_disconnect`, Phase 3); 6.3 done early (#28, #29), its row now checked: the threaded
+acceptance suite runs under TSan in CI (#50); 6.4 `onLogout` runs after `disconnect()` releases
+the session lock (#47); 6.5 `Acceptor::stop` joins the `onStart` thread before `onStop`
+(quickfix/quickfix#740, #48); 6.6 a connection never takes a session of another port, and
+`ThreadedSocketAcceptor::onStop` sleeps while it waits for logouts (#49). Test fixtures:
+`SessionPair::DropConnection`, `LoggedOn`, `ProbeDuringLogout`; `StartedAcceptor` and
+`Counterparty` in `TeardownRaceScenarios.cpp`.
+**Red → green:** 6.1 TSan data race (`Session::send` against `setResponder` in the connection's
+destructor) → none; 6.2 `onLogout` never called → called; 6.3 59/59 threaded acceptance with no
+TSan report (Docker; a guard: no red); 6.4 a send from another thread blocked on the session lock
+during `onLogout` → returns; 6.5 35–37 of 40 starts failed and ~40 descriptors leaked → none;
+6.6 the wrong port reached the session and its own-port Logon went unanswered → refused, logs on;
+a forced stop used 2998 ms CPU in 2998 ms → under 500 ms.
+**Checks:** no `dod.json`; per PR: `krx_ut` (89 → 92 cases) and `ut` on macOS, `krx_ut` under TSan
+in `ubuntu:24.04` (twice), FIX.4.4 acceptance 59/59 plain and threaded, `lint.sh .` passing. #46
+green in CI (mutation 100 %); #47–#50 get CI once retargeted to `krx/main`. Local ASan in Docker
+is unusable today (as slow on `krx/main`): CI's `sanitize (address)` is the ASan check.
+**Decisions taken:** `onLogout` comes after the session reset; on a self-closed connection it
+runs in the connection's thread, outside the acceptor's and initiator's locks. Callbacks still
+under the session lock are listed in `KRX_FORK_NOTES.md` (P1-2): `toAdmin`, `toApp`, and
+`onLogout` when the caller holds the lock (store failure in `sendRaw`, a resend, the reset outside
+session time). The initiator's `stop()` order (6.5) and its `onStop` spin (6.6) are unchanged: no
+test made them fail; Phase 8.7 (shutdown under load) takes them, red first.
+**Away from the spec:** none.
+**Left for the owner:** merge #45 (nightly mutation fix; scores are 50–51 %, the job now takes over
+2 of its 3 hours), then the Phase 6 stack #46–#50 in order, each retargeted and green first.
