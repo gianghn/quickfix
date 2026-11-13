@@ -28,9 +28,13 @@
 
 #include "MessageStore.h"
 #include "SessionSettings.h"
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <fstream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace FIX
@@ -87,12 +91,15 @@ private:
 class FileStore : public MessageStore
 {
 public:
-  FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync = false );
+  // KRX fork (15.6): with `flushIntervalMs` > 0 and `sync` off, a background thread flushes the store
+  // to disk that often (FileStoreFlushInterval).
+  FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync = false,
+             int flushIntervalMs = 0 );
   virtual ~FileStore();
 
   // KRX fork (P0-5): how many file syncs the store has done (FileStoreSync=Y); a stored message
-  // costs one (its body).
-  [[nodiscard]] std::uint64_t getSyncCount() const { return m_syncCount; }
+  // costs one (its body). 15.6: a background flush costs two (body, seqnums).
+  [[nodiscard]] std::uint64_t getSyncCount() const { return m_syncCount.load(); }
 
   bool set( int, const std::string& ) EXCEPT ( IOException );
   void get( int, int, std::vector<std::string>& ) const EXCEPT ( IOException );
@@ -109,6 +116,13 @@ public:
   void reset( const UtcTimeStamp& now ) EXCEPT ( IOException );
   void refresh() EXCEPT ( IOException );
 
+protected:
+  // KRX fork (P0-5, 15.6): forces the file open as `fd` to disk; true once it is there.
+  virtual bool syncFile( int fd );
+  // KRX fork (15.6): ends the background flush, after a last flush of what is not on disk yet. A
+  // subclass that overrides syncFile calls it in its own destructor.
+  void stopFlusher();
+
 private:
 #ifdef _MSC_VER
   typedef std::pair<int, std::size_t> OffsetSize;
@@ -122,7 +136,7 @@ private:
   bool readFromFile( int offset, int size, std::string& msg );
   void setSeqNum();
   void setSession();
-  // KRX fork (P0-5): FileStoreSync. True once `file` is on disk.
+  // KRX fork (P0-5): FileStoreSync. True once `file` is on disk (syncFile, counted).
   bool syncedToDisk( FILE* file );
   // KRX fork (P0-5): indexes the body's messages past the last header record (after a crash).
   void recoverUnindexed();
@@ -149,10 +163,29 @@ private:
   // are rebuilt from it after a crash (recoverUnindexed), and a next target seqnum that is behind
   // only makes the counterparty resend.
   bool m_sync = false;
-  std::uint64_t m_syncCount = 0;
+  std::atomic<std::uint64_t> m_syncCount{ 0 };
   // KRX fork (15.1): where the next body and header record go: the files' ends, kept in memory.
   std::int64_t m_msgEnd = 0;
   std::int64_t m_headerEnd = 0;
+
+  // KRX fork (15.6): the background flush. Writes mark the store unflushed; every interval the
+  // flusher syncs copies of the body and seqnums descriptors (taken under m_flushMutex, which
+  // open() and rollBack() hold while they swap the files), so a write never waits for a sync. A
+  // failed flush is kept and fails the next set(). The thread starts with the first write after
+  // construction, so it never calls a subclass's syncFile before that subclass exists.
+  void markUnflushed();
+  void flushLoop();
+  bool flushOnce( bool viaOverride );
+  void endFlusher( bool viaOverride );
+  int m_flushIntervalMs = 0;
+  bool m_constructed = false;
+  std::thread m_flusher;
+  std::mutex m_flushMutex;
+  std::condition_variable m_flushWake;
+  bool m_flusherStop = false;         // guarded by m_flushMutex
+  std::string m_flushError;           // guarded by m_flushMutex
+  std::atomic<bool> m_unflushed{ false };
+  std::atomic<bool> m_flushFailed{ false };
 };
 }
 

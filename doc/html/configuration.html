@@ -923,6 +923,24 @@ AppDataDictionary.FIX.4.4=FIX44.xml
           <td>N</td>
         </tr>
 
+        <tr align="left" valign="middle">
+          <td><b>FileStoreFlushInterval</b></td>
+
+          <td>(KRX fork) With FileStoreSync=N, a background thread forces
+          the store to disk (<code>fdatasync</code>) this many milliseconds
+          apart, so a host crash or power loss loses at most about one
+          interval of messages instead of the operating system's ~30 s.
+          Sending does not wait for it, so messages already sent can still
+          be lost: after a host crash the sequence numbers must be agreed
+          with the counterparty and recent orders reconciled. A failed
+          flush makes the next stored message fail, which disconnects the
+          session. Ignored when FileStoreSync=Y.</td>
+
+          <td>positive integer (ms), e.g. 5</td>
+
+          <td>0 (no background flush)</td>
+        </tr>
+
         <tr align="center" valign="middle">
           <td colspan="4" bgcolor="#BBBBBB"><h3>MYSQL</h3></td>
         </tr>

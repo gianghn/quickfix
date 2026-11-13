@@ -86,6 +86,18 @@ bool writeAt( FILE* file, std::int64_t offset, const std::string& data )
 #endif
 }
 
+// KRX fork (P0-5, 15.6): forces the file open as `fd` to disk. True once it is there.
+bool syncDescriptor( int fd )
+{
+#ifdef _MSC_VER
+  return _commit( fd ) == 0;
+#elif defined( __APPLE__ )
+  return fsync( fd ) == 0; // macOS has no fdatasync
+#else
+  return fdatasync( fd ) == 0;
+#endif
+}
+
 // KRX fork (15.1): `value` as printf's "%10.10d" writes it: at least ten digits, zero-padded.
 std::string tenDigits( int value )
 {
@@ -95,9 +107,10 @@ std::string tenDigits( int value )
 }
 }
 
-FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync )
+FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID& sessionID, bool sync,
+                      int flushIntervalMs )
 : m_cache( now ), m_msgFile( nullptr ), m_headerFile( nullptr ), m_seqNumsFile( nullptr ),
-  m_sessionFile( nullptr ), m_sync( sync )
+  m_sessionFile( nullptr ), m_sync( sync ), m_flushIntervalMs( sync ? 0 : flushIntervalMs )
 {
   file_mkdir( path.c_str() );
 
@@ -131,10 +144,12 @@ FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID
   {
     throw ConfigError( e.what() );
   }
+  m_constructed = true; // KRX fork (15.6): the flusher may start with the next write
 }
 
 FileStore::~FileStore()
 {
+  endFlusher( false ); // KRX fork (15.6)
   if( m_msgFile ) fclose( m_msgFile );
   if( m_headerFile ) fclose( m_headerFile );
   if( m_seqNumsFile ) fclose( m_seqNumsFile );
@@ -143,6 +158,7 @@ FileStore::~FileStore()
 
 void FileStore::open( bool deleteFile )
 {
+  const std::scoped_lock files( m_flushMutex ); // KRX fork (15.6): the flusher waits meanwhile
   if ( m_msgFile ) fclose( m_msgFile );
   if ( m_headerFile ) fclose( m_headerFile );
   if ( m_seqNumsFile ) fclose( m_seqNumsFile );
@@ -263,7 +279,9 @@ MessageStore* FileStoreFactory::create( const UtcTimeStamp& now, const SessionID
   Dictionary settings = m_settings.get( sessionID );
   path = settings.getString( FILE_STORE_PATH );
   const bool sync = settings.has( FILE_STORE_SYNC ) && settings.getBool( FILE_STORE_SYNC );
-  return std::make_unique<FileStore>( now, path, sessionID, sync ).release();
+  const int flushIntervalMs
+    = settings.has( FILE_STORE_FLUSH_INTERVAL ) ? settings.getInt( FILE_STORE_FLUSH_INTERVAL ) : 0;
+  return std::make_unique<FileStore>( now, path, sessionID, sync, flushIntervalMs ).release();
 }
 
 void FileStoreFactory::destroy( MessageStore* pStore )
@@ -276,9 +294,14 @@ EXCEPT ( IOException )
 {
   if ( !m_msgFile || !m_headerFile )
     throw IOException( "Store files are not open: " + m_msgFileName );
+  if ( m_flushFailed.load() ) // KRX fork (15.6): fail closed, as for a failed write (D7)
+  {
+    const std::scoped_lock lock( m_flushMutex );
+    throw IOException( m_flushError );
+  }
   const std::int64_t offset = m_msgEnd;
   const std::int64_t headerEnd = m_headerEnd;
-  std::size_t size = msg.size();
+  const std::size_t size = msg.size();
 
   // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each handed to
   // the operating system; the message is in m_offsets only once both are on file. Any failure puts
@@ -297,6 +320,7 @@ EXCEPT ( IOException )
   m_msgEnd = offset + static_cast<std::int64_t>( size );
   m_headerEnd = headerEnd + static_cast<std::int64_t>( record.size() );
   m_offsets.insert_or_assign( msgSeqNum, OffsetSize( static_cast<OffsetSize::first_type>( offset ), size ) );
+  markUnflushed();
   return true;
 }
 
@@ -305,6 +329,7 @@ EXCEPT ( IOException )
 // the failure (closing may write those bytes; the cut removes them).
 void FileStore::rollBack( std::int64_t msgEnd, std::int64_t headerEnd, const std::string& error )
 {
+  const std::scoped_lock files( m_flushMutex ); // KRX fork (15.6): the flusher waits meanwhile
   fclose( m_msgFile );
   fclose( m_headerFile );
   bool restored = true;
@@ -407,6 +432,7 @@ void FileStore::setSeqNum()
     = tenDigits( getNextSenderMsgSeqNum() ) + " : " + tenDigits( getNextTargetMsgSeqNum() );
   if ( !writeAt( m_seqNumsFile, 0, seqNums ) )
     throw IOException( "Unable to write to file " + m_seqNumsFileName );
+  markUnflushed();
   // KRX fork (P0-5): the body rebuilds the next sender seqnum up to its last message, so only a
   // seqnum past it (PersistMessages=N, a reset) needs a sync; the target seqnum never does.
   const int lastStored = m_offsets.empty() ? 0 : m_offsets.rbegin()->first;
@@ -416,16 +442,93 @@ void FileStore::setSeqNum()
 
 bool FileStore::syncedToDisk( FILE* file )
 {
-#ifdef _MSC_VER
-  const int result = _commit( _fileno( file ) );
-#elif defined( __APPLE__ )
-  const int result = fsync( fileno( file ) ); // macOS has no fdatasync
-#else
-  const int result = fdatasync( fileno( file ) );
-#endif
-  if ( result != 0 ) return false;
+  if ( !syncFile( fileno( file ) ) ) return false;
   ++m_syncCount;
   return true;
+}
+
+bool FileStore::syncFile( int fd )
+{
+  return syncDescriptor( fd );
+}
+
+// KRX fork (15.6): a write happened; with a flush interval, the flusher takes it to disk. The
+// thread starts here, never while the store is being built (see FileStore.h).
+void FileStore::markUnflushed()
+{
+  if ( m_flushIntervalMs <= 0 ) return;
+  m_unflushed = true;
+  if ( m_constructed && !m_flusher.joinable() )
+    m_flusher = std::thread( [this] { flushLoop(); } );
+}
+
+// KRX fork (15.6): every interval, from a fixed tick (a slow flush does not stretch the next one),
+// flushes the store when anything was written since the last flush. Ends on stopFlusher().
+void FileStore::flushLoop()
+{
+  const auto interval = std::chrono::milliseconds( m_flushIntervalMs );
+  auto tick = std::chrono::steady_clock::now() + interval;
+  std::unique_lock<std::mutex> lock( m_flushMutex );
+  while ( !m_flusherStop )
+  {
+    m_flushWake.wait_until( lock, tick, [this] { return m_flusherStop; } );
+    tick = std::max( tick + interval, std::chrono::steady_clock::now() );
+    if ( m_flusherStop || !m_unflushed.exchange( false ) ) continue;
+    lock.unlock();
+    const bool flushed = flushOnce( true );
+    lock.lock();
+    if ( !flushed && !m_flushFailed.load() )
+    {
+      m_flushError = "Background flush failed, store not on disk: " + m_msgFileName;
+      m_flushFailed = true;
+    }
+  }
+}
+
+// KRX fork (15.6): syncs copies of the body and seqnums descriptors, taken under m_flushMutex, so
+// open() or rollBack() may replace the files meanwhile and a write never waits for the sync.
+// `viaOverride`: through syncFile (false in the destructor, where a subclass's is gone).
+bool FileStore::flushOnce( bool viaOverride )
+{
+  int body = -1;
+  int seqNums = -1;
+  {
+    const std::scoped_lock files( m_flushMutex );
+    if ( m_msgFile && m_seqNumsFile )
+    {
+      body = dup( fileno( m_msgFile ) );
+      seqNums = dup( fileno( m_seqNumsFile ) );
+    }
+  }
+  const auto synced = [this, viaOverride]( int fd ) {
+    return fd >= 0 && ( viaOverride ? syncFile( fd ) : syncDescriptor( fd ) );
+  };
+  const bool bodySynced = synced( body );
+  const bool seqNumsSynced = synced( seqNums );
+  if ( body >= 0 ) close( body );
+  if ( seqNums >= 0 ) close( seqNums );
+  if ( bodySynced ) ++m_syncCount;
+  if ( seqNumsSynced ) ++m_syncCount;
+  return bodySynced && seqNumsSynced;
+}
+
+void FileStore::stopFlusher()
+{
+  endFlusher( true );
+}
+
+// KRX fork (15.6): stops and joins the flusher, then flushes the last writes before the files
+// close; `viaOverride` as for flushOnce.
+void FileStore::endFlusher( bool viaOverride )
+{
+  if ( !m_flusher.joinable() ) return;
+  {
+    const std::scoped_lock lock( m_flushMutex );
+    m_flusherStop = true;
+  }
+  m_flushWake.notify_all();
+  m_flusher.join();
+  if ( m_unflushed.exchange( false ) ) flushOnce( viaOverride );
 }
 
 // KRX fork (P0-5): with FileStoreSync only the body is synced, so after a crash the header and

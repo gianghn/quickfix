@@ -88,6 +88,9 @@ constexpr const char* MAX_QUEUED_MESSAGES = "MaxQueuedMessages";  // KRX fork (U
 const char FILE_STORE_PATH[] = "FileStorePath";
 // KRX fork (P0-5): Y forces the store's files to disk before a send returns (default N).
 constexpr const char* FILE_STORE_SYNC = "FileStoreSync";
+// KRX fork (15.6, Q18): with FileStoreSync=N, milliseconds between background flushes to disk (default
+// 0: none).
+constexpr const char* FILE_STORE_FLUSH_INTERVAL = "FileStoreFlushInterval";
 const char MYSQL_STORE_USECONNECTIONPOOL[] = "MySQLStoreUseConnectionPool";
 const char MYSQL_STORE_DATABASE[] = "MySQLStoreDatabase";
 const char MYSQL_STORE_USER[] = "MySQLStoreUser";
