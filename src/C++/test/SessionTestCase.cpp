@@ -2566,6 +2566,7 @@ TEST_CASE_METHOD(acceptorFixture, "AcceptorSessionTestCase")
     object->next( createLogon( "ISLD", "TW", 1 ), now );
     object->next( createTestRequest( "ISLD", "TW", 5, "A" ), now );  // queued
     object->next( createTestRequest( "ISLD", "TW", 6, "B" ), now );  // refused: logged
+    CHECK( 1 == logs.events.queueFull );
     object->next( createTestRequest( "ISLD", "TW", 7, "C" ), now );  // refused: not logged
     CHECK( 1 == logs.events.queueFull );
 
