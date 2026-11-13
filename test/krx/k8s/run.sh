@@ -93,7 +93,7 @@ tail -n +1 -f --pid="$pid" /w/out.log &
 dumped=""
 while kill -0 "$pid" 2>/dev/null; do
   if [ -z "$dumped" ] && grep -qE '\*\*\* (HANG|STALLED)' /w/out.log; then
-    gdb -p "$pid" -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#' || true
+    gdb -p "$pid" -batch -ex 'thread apply all bt 25' 2>&1 | grep -vE '^\[New LWP' | head -600 || true
     dumped=yes
   fi
   sleep 2
