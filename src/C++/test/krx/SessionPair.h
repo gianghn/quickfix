@@ -114,9 +114,14 @@ class LogonWatcher : public FIX::Application {
     if (throw_from_app_.load()) {
       throw std::runtime_error("gateway callback failed");
     }
+    app_messages_.fetch_add(1);
   }
 
+  // How many application messages reached fromApp.
+  [[nodiscard]] int AppMessages() const { return app_messages_.load(); }
+
  private:
+  std::atomic<int> app_messages_{0};
   std::atomic<bool> logged_on_{false};
   std::atomic<bool> throw_from_app_{false};
   std::atomic<bool> throw_from_admin_{false};
@@ -258,6 +263,9 @@ class SessionPair {
   }
 
   [[nodiscard]] bool ProbeReturned() const { return application_.ProbeReturned(); }
+
+  // How many application messages from the counterparty reached the gateway's fromApp.
+  [[nodiscard]] int AppMessages() const { return application_.AppMessages(); }
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
 

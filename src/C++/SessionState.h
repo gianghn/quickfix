@@ -167,8 +167,17 @@ public:
   void logoutReason( const std::string& value ) 
   { Locker l( m_mutex ); m_logoutReason = value; }
 
-  void queue( int msgSeqNum, const Message& message )
-  { Locker l( m_mutex ); m_queue[ msgSeqNum ] = message; }
+  // KRX fork (U-9, Q16): at most MAX_QUEUED messages wait above a gap; false when this one was
+  // dropped instead (the open ResendRequest asks up to the latest, so it comes back).
+  static constexpr std::size_t MAX_QUEUED = 10000;
+  bool queue( int msgSeqNum, const Message& message )
+  {
+    const Locker l( m_mutex );
+    if ( m_queue.size() >= MAX_QUEUED && m_queue.find( msgSeqNum ) == m_queue.end() )
+      return false;
+    m_queue[ msgSeqNum ] = message;
+    return true;
+  }
   bool retrieve( int msgSeqNum, Message& message )
   {
     Locker l( m_mutex );

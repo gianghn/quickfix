@@ -472,17 +472,21 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   bool appMessageJustSent = false;
   std::string messageString;
   const Responder* const responder = m_pResponder;
+  auto nextYield = std::chrono::steady_clock::now();
 
   for ( i = messages.begin(); i != messages.end(); ++i )
   {
-    // KRX fork (P0-3): the caller holds m_mutex; before each message, let the threads waiting for
-    // it in (up to 10 ms, so a stream of senders cannot stall the resend), and stop if the
-    // connection went away meanwhile.
+    // KRX fork (P0-3): the caller holds m_mutex; after each millisecond of resending, let the
+    // threads waiting for it in (for up to a millisecond), and stop if the connection went away
+    // meanwhile. KRX fork (Q15): it was before every message, up to 10 ms each, so a steady order
+    // flow slowed a resend to about 100 messages a second.
+    if ( std::chrono::steady_clock::now() >= nextYield )
     {
       const ReverseLocker unlocked( m_mutex );
-      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
+      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 1 );
       while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
         std::this_thread::yield();
+      nextYield = std::chrono::steady_clock::now() + std::chrono::milliseconds( 1 );
     }
     if ( m_pResponder != responder ) return;
     appMessageJustSent = false;
@@ -807,6 +811,7 @@ void Session::disconnect()
   m_state.receivedReset( false );
   m_state.sentReset( false );
   m_state.clearQueue();
+  m_queueDropped = 0;
   m_state.logoutReason();
   if ( m_resetOnDisconnect )
     m_state.reset( m_timestamper() );
@@ -1388,7 +1393,15 @@ void Session::doTargetTooHigh( const Message& msg )
                    + " but received "
                    + IntConvertor::convert( msgSeqNum ) );
 
-  m_state.queue( msgSeqNum, msg );
+  // KRX fork (U-9, Q16): an error event on the first message dropped above a full queue, then on
+  // every thousandth, until the next disconnect.
+  if ( !m_state.queue( msgSeqNum, msg ) && ++m_queueDropped % 1000 == 1 )
+  {
+    const std::string event = "Queue full (" + IntConvertor::convert( static_cast<int>( SessionState::MAX_QUEUED ) )
+      + " messages): dropped MsgSeqNum " + IntConvertor::convert( msgSeqNum ) + ", "
+      + IntConvertor::convert( m_queueDropped ) + " so far; the resend brings them";
+    m_state.onEvent( event );
+  }
 
   if( m_state.resendRequested() )
   {

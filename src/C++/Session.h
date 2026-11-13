@@ -370,6 +370,8 @@ private:
   bool m_checkLatency;
   int m_maxLatency;
   int m_sendTimeoutMs{ 0 };
+  // KRX fork (U-9): messages dropped above a full queue since the last disconnect.
+  int m_queueDropped{ 0 };
   bool m_resetOnLogon;
   bool m_resetOnLogout;
   bool m_resetOnDisconnect;

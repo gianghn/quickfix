@@ -650,11 +650,16 @@ SCENARIO("A large resend stops when its socket is shut down", "[krx][v1][securit
 // thread, so neither read and both sends timed out, again on every reconnect (krx_stress echo-on).
 // The counterparty here only reads once its own backlog is written.
 namespace {
-std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int count) {
+std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int count,
+                                bool resent = false) {
   std::string backlog;
   for (int seq = first_seq; seq < first_seq + count; ++seq) {
     FIX::Message message;
     message.getHeader().setField(FIX::MsgType("j"));
+    if (resent) {
+      message.getHeader().setField(FIX::PossDupFlag(true));
+      message.getHeader().setField(FIX::OrigSendingTime(FIX::UtcTimeStamp::now()));
+    }
     message.setField(FIX::RefMsgType("D"));
     message.setField(FIX::BusinessRejectReason(0));
     message.setField(FIX::Text(std::string(1024, 'y')));
@@ -679,6 +684,85 @@ SCENARIO("A resend completes while the counterparty is resending its own backlog
         INFO("backlog written: " << written << ", " << resent << " resent; events:\n"
                                  << pair.Events().Dump());
         REQUIRE((written && resent == kResent && !pair.Events().Contains("Send timed out")));
+      }
+    }
+  }
+}
+
+namespace {
+// Three gateway threads placing orders as fast as they can until `stop`.
+class OrderFlood {
+ public:
+  explicit OrderFlood(krx::SessionPair& pair) {
+    for (int i = 0; i < 3; ++i) {
+      threads_.emplace_back([this, &pair] {
+        while (!stop_.load()) {
+          pair.Send(NewOrder());
+        }
+      });
+    }
+  }
+
+  ~OrderFlood() { stop_.store(true); }
+
+  OrderFlood(const OrderFlood&) = delete;
+  OrderFlood& operator=(const OrderFlood&) = delete;
+  OrderFlood(OrderFlood&&) = delete;
+  OrderFlood& operator=(OrderFlood&&) = delete;
+
+ private:
+  std::atomic<bool> stop_{false};
+  std::vector<std::jthread> threads_;
+};
+
+// The counterparty skips message 2, sends 3 to `count` + 2, waits for the ResendRequest and
+// resends from 2; returns once the gateway's fromApp saw all of them, or after 10 s.
+void SkipThenResend(const krx::SessionPair& pair, int count) {
+  REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 3, count), kWait));
+  REQUIRE(pair.WaitForEvent("Sent ResendRequest", kWait));
+  REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 2, count + 1, true), kWait));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (pair.AppMessages() < count + 1 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+}  // namespace
+
+// Row 3.5 again (8.5, owner decision Q15): the resend let waiting senders in before every message,
+// up to 10 ms each, so under a steady order flow it crawled at about 100 messages a second and
+// the peer queued everything sent meanwhile (krx_stress echo-on: 1.9 GB, OOM).
+SCENARIO("A large resend finishes quickly while senders keep placing orders",
+         "[krx][v1][security][p0-3]") {
+  GIVEN("a logged-on session with 2000 messages to resend and three senders placing orders") {
+    krx::SessionPair pair("KRXRSQ15", WithManyStoredMessages("KRXRSQ15"));
+    LogOn(pair);
+    const OrderFlood flood(pair);
+    WHEN("the counterparty asks for them all and reads as fast as it can") {
+      const auto asked = std::chrono::steady_clock::now();
+      AskForMessagesFrom(pair, 2);
+      const int resent = ReadResent(pair, kResent);
+      const auto took = std::chrono::steady_clock::now() - asked;
+      THEN("all 2000 arrive within 5 seconds") {
+        INFO(resent << " resent in "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+                    << " ms");
+        REQUIRE((resent == kResent && took < std::chrono::seconds(5)));
+      }
+    }
+  }
+}
+
+// Row U-9 (8.3, owner decision Q16): messages above a gap were queued without a limit.
+SCENARIO("At most 10,000 messages wait above a gap, and the resend brings the rest",
+         "[krx][v1][security][u-9]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU9");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3 to 20002, then resends from 2") {
+      SkipThenResend(pair, 20000);
+      THEN("the queue stopped at 10,000, said so, and every message arrived once") {
+        INFO(pair.AppMessages() << " delivered");
+        REQUIRE((pair.Events().Contains("Queue full") && pair.AppMessages() == 20001));
       }
     }
   }
