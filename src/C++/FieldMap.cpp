@@ -68,6 +68,10 @@ FieldMap::~FieldMap()
 
 FieldMap& FieldMap::operator=( const FieldMap& rhs )
 {
+  // KRX fork (P1-6, quickfix/quickfix#764): clear() would empty rhs too.
+  if ( this == &rhs )
+    return *this;
+
   clear();
 
   m_fields = rhs.m_fields;
@@ -86,6 +90,13 @@ FieldMap& FieldMap::operator=( const FieldMap& rhs )
 
 FieldMap& FieldMap::operator=(FieldMap&& rhs)
 {
+  // KRX fork (P1-6, quickfix/quickfix#764): our own groups are owned pointers; the move used to
+  // overwrite them without freeing them.
+  if ( this == &rhs )
+    return *this;
+
+  clear();
+
   m_fields = std::move(rhs.m_fields);
   m_groups = std::move(rhs.m_groups);
   m_order = std::move(rhs.m_order);
