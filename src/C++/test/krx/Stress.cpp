@@ -13,11 +13,16 @@
 // Usage: krx_stress [seconds=30] [sessions=4] [threads=4] [port=7700] [seed=1] [workdir]
 //                   [--no-echo] [--file-log] [--settle=<seconds, 120>] [--hang-grace=<seconds, 0>]
 //                   [--stop-limit=<seconds a stop may take, 15; more under a sanitizer>]
+//                   [--soak] [--rate=<orders/s per sender thread>] [--chaos-ms=<150>]
+//                   [--report=<seconds between progress lines, 5>]
+// A soak (plan item 8.5, hours): --soak --rate=200 --chaos-ms=5000 --report=60; each progress
+// line has the process RSS and open descriptors, which must stay flat.
 // Exit status: 0 PASS, 1 anomalies, 3 a step hung (the watchdog), 2 bad usage.
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -27,6 +32,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -79,7 +85,38 @@ struct Options {
   int settle_seconds = 120;
   int hang_grace_seconds = 0;
   int stop_limit_seconds = 15;  // plan item 8.7: every stop under load within 15 s
+  bool soak = false;            // no per-message seqnum records (a lost order prints no seq)
+  int rate = 0;                 // orders a second per sender thread; 0: as fast as it goes
+  int chaos_ms = 150;           // the least time between chaos steps (up to 350 ms more)
+  int report_seconds = 5;       // how often a progress line is printed
 };
+
+// The value of a "--name=value" argument.
+int FlagValue(const std::string& text) {
+  return std::stoi(text.substr(text.find('=') + 1));
+}
+
+// Sets the option a "--name=value" argument names; false when it names none.
+bool SetIntFlag(const std::string& text, Options& options) {
+  using Flag = std::pair<std::string_view, int Options::*>;
+  const std::array<Flag, 6> flags{
+      {
+          {"--settle=", &Options::settle_seconds},
+          {"--hang-grace=", &Options::hang_grace_seconds},
+          {"--stop-limit=", &Options::stop_limit_seconds},
+          {"--rate=", &Options::rate},
+          {"--chaos-ms=", &Options::chaos_ms},
+          {"--report=", &Options::report_seconds},
+      },
+  };
+  for (const auto& [name, field] : flags) {
+    if (text.starts_with(name)) {
+      options.*field = FlagValue(text);
+      return true;
+    }
+  }
+  return false;
+}
 
 Options Parse(std::span<char*> args) {
   Options options;
@@ -90,13 +127,9 @@ Options Parse(std::span<char*> args) {
       options.echo = false;
     } else if (text == "--file-log") {
       options.file_log = true;
-    } else if (text.starts_with("--settle=")) {
-      options.settle_seconds = std::stoi(text.substr(text.find('=') + 1));
-    } else if (text.starts_with("--hang-grace=")) {
-      options.hang_grace_seconds = std::stoi(text.substr(text.find('=') + 1));
-    } else if (text.starts_with("--stop-limit=")) {
-      options.stop_limit_seconds = std::stoi(text.substr(text.find('=') + 1));
-    } else {
+    } else if (text == "--soak") {
+      options.soak = true;
+    } else if (!SetIntFlag(text, options)) {
       positional.push_back(text);
     }
   }
@@ -112,10 +145,41 @@ Options Parse(std::span<char*> args) {
 
 // ---------- what was sent and received, per stream "s<session>.t<thread>[.echo]" ----------
 
+// One bit per message number; a stream's numbers are dense from 0, so a soak's hundreds of
+// millions of messages fit in a few MB.
+class Bits {
+ public:
+  // True when the bit was already set.
+  bool Set(std::int64_t number) {
+    const auto index = static_cast<std::size_t>(number);
+    words_.resize(std::max(words_.size(), (index / kWord) + 1));
+    const std::uint64_t mask = std::uint64_t{1} << (index % kWord);
+    const bool was = (words_[index / kWord] & mask) != 0;
+    words_[index / kWord] |= mask;
+    return was;
+  }
+
+  [[nodiscard]] bool Test(std::int64_t number) const {
+    const auto index = static_cast<std::size_t>(number);
+    return index / kWord < words_.size() &&
+           (words_[index / kWord] & (std::uint64_t{1} << (index % kWord))) != 0;
+  }
+
+  // One past the highest number that can be set.
+  [[nodiscard]] std::int64_t End() const {
+    return static_cast<std::int64_t>(words_.size()) * static_cast<std::int64_t>(kWord);
+  }
+
+ private:
+  static constexpr std::size_t kWord = 64;
+  std::vector<std::uint64_t> words_;
+};
+
 struct Stream {
-  std::set<std::int64_t> sent_ok;
-  std::set<std::int64_t> sent_false;
-  std::set<std::int64_t> received;
+  Bits sent_ok;
+  Bits sent_false;
+  Bits received;
+  std::int64_t received_count = 0;
   std::int64_t last = -1;
   std::int64_t dup = 0;
   std::int64_t ooo = 0;
@@ -125,14 +189,16 @@ class Tracker {
  public:
   void Sent(const std::string& key, std::int64_t number, bool ok) {
     const std::scoped_lock lock(mutex_);
-    (ok ? streams_[key].sent_ok : streams_[key].sent_false).insert(number);
+    (ok ? streams_[key].sent_ok : streams_[key].sent_false).Set(number);
   }
 
   void Received(const std::string& key, std::int64_t number) {
     const std::scoped_lock lock(mutex_);
     Stream& stream = streams_[key];
-    if (!stream.received.insert(number).second) {
+    if (stream.received.Set(number)) {
       ++stream.dup;
+    } else {
+      ++stream.received_count;
     }
     if (number <= stream.last) {
       ++stream.ooo;
@@ -145,7 +211,7 @@ class Tracker {
     const std::scoped_lock lock(mutex_);
     std::int64_t count = 0;
     for (const auto& entry : streams_) {
-      count += static_cast<std::int64_t>(entry.second.received.size());
+      count += entry.second.received_count;
     }
     return count;
   }
@@ -160,27 +226,36 @@ class Tracker {
   std::map<std::string, Stream> streams_;
 };
 
-// The MsgSeqNum each message first went out with (toApp runs after the header is filled).
+// The MsgSeqNum each message first went out with (toApp runs after the header is filled); 4 bytes
+// a message, so a soak (--soak) records none.
 class Sequences {
  public:
+  void Disable() { enabled_.store(false); }
+
   void Record(const std::string& key, std::int64_t number, int seq) {
+    if (!enabled_.load()) {
+      return;
+    }
     const std::scoped_lock lock(mutex_);
-    seqs_[key].try_emplace(number, seq);
+    std::vector<int>& seqs = seqs_[key];
+    const auto index = static_cast<std::size_t>(number);
+    seqs.resize(std::max(seqs.size(), index + 1));
+    if (seqs[index] == 0) {
+      seqs[index] = seq;
+    }
   }
 
   [[nodiscard]] int Find(const std::string& key, std::int64_t number) const {
     const std::scoped_lock lock(mutex_);
     const auto stream = seqs_.find(key);
-    if (stream == seqs_.end()) {
-      return 0;
-    }
-    const auto found = stream->second.find(number);
-    return found == stream->second.end() ? 0 : found->second;
+    const auto index = static_cast<std::size_t>(number);
+    return stream == seqs_.end() || index >= stream->second.size() ? 0 : stream->second[index];
   }
 
  private:
+  std::atomic<bool> enabled_{true};
   mutable std::mutex mutex_;
-  std::map<std::string, std::map<std::int64_t, int>> seqs_;
+  std::map<std::string, std::vector<int>> seqs_;
 };
 
 // What made a receiving session skip incoming sequence numbers: GapFills it received, Rejects it
@@ -299,7 +374,7 @@ class StressApp : public FIX::Application {
     }
     incoming_.tracker.Received(key, number);
     if (acceptor_ && echo_) {
-      Echo(message, key, id);
+      Echo(message, key, number, id);
     }
   }
 
@@ -312,12 +387,13 @@ class StressApp : public FIX::Application {
     return acceptor_ ? id.getTargetCompID().getValue() : id.getSenderCompID().getValue();
   }
 
-  void Echo(const FIX::Message& message, const std::string& key, const FIX::SessionID& id) {
+  // The echo of order n is message n of the echo stream: dense numbers, in the order's order.
+  void Echo(const FIX::Message& message, const std::string& key, std::int64_t number,
+            const FIX::SessionID& id) {
     FIX::Message echo(message);
     echo.getHeader().removeField(FIX::FIELD::PossDupFlag);
     echo.getHeader().removeField(FIX::FIELD::OrigSendingTime);
     const std::string echo_key = key + ".echo";
-    const std::int64_t number = echo_number_.fetch_add(1);
     echo.setField(FIX::ClOrdID(std::format("{}.n{}", echo_key, number)));
     bool ok = false;
     try {
@@ -334,7 +410,6 @@ class StressApp : public FIX::Application {
   Direction& incoming_;
   std::atomic<std::int64_t> logons_{0};
   std::atomic<std::int64_t> logouts_{0};
-  std::atomic<std::int64_t> echo_number_{0};
 };
 
 // ---------- the watchdog: a step past its deadline ends the run with status 3 ----------
@@ -619,7 +694,9 @@ void SendLoop(Rig& rig, Tracker& tracker, int session, int thread) {
       continue;
     }
     tracker.Sent(key, number, *sent);
-    if (number % kBurst == kBurst - 1) {
+    if (rig.options.rate > 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds(1'000'000 / rig.options.rate));
+    } else if (number % kBurst == kBurst - 1) {
       std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
     ++number;
@@ -783,8 +860,8 @@ struct Totals {
 void TraceLost(const Direction& direction, const std::string& key, const Stream& stream,
                Totals& totals) {
   int shown = 0;
-  for (const std::int64_t number : stream.sent_ok) {
-    if (stream.received.contains(number)) {
+  for (std::int64_t number = 0; number < stream.sent_ok.End(); ++number) {
+    if (!stream.sent_ok.Test(number) || stream.received.Test(number)) {
       continue;
     }
     ++totals.lost;
@@ -802,15 +879,20 @@ void TraceLost(const Direction& direction, const std::string& key, const Stream&
 }
 
 void CountStream(const Stream& stream, Totals& totals) {
-  totals.sent_ok += static_cast<std::int64_t>(stream.sent_ok.size());
-  totals.sent_false += static_cast<std::int64_t>(stream.sent_false.size());
-  totals.received += static_cast<std::int64_t>(stream.received.size());
+  totals.received += stream.received_count;
   totals.dup += stream.dup;
   totals.ooo += stream.ooo;
-  for (const std::int64_t number : stream.received) {
-    if (stream.sent_false.contains(number)) {
+  const std::int64_t end =
+      std::max({stream.sent_ok.End(), stream.sent_false.End(), stream.received.End()});
+  for (std::int64_t number = 0; number < end; ++number) {
+    totals.sent_ok += stream.sent_ok.Test(number) ? 1 : 0;
+    totals.sent_false += stream.sent_false.Test(number) ? 1 : 0;
+    if (!stream.received.Test(number)) {
+      continue;
+    }
+    if (stream.sent_false.Test(number)) {
       ++totals.late;
-    } else if (!stream.sent_ok.contains(number)) {
+    } else if (!stream.sent_ok.Test(number)) {
       ++totals.unexpected;
     }
   }
@@ -832,23 +914,35 @@ std::int64_t Verify(const Direction& direction, const std::string& name) {
 
 // ---------- the run ----------
 
+// The process's resident memory in MB (Linux /proc; elsewhere 0).
+std::int64_t RssMb() {
+  std::ifstream statm("/proc/self/statm");
+  std::int64_t pages = 0;
+  std::int64_t resident = 0;
+  if (!(statm >> pages >> resident)) {
+    return 0;
+  }
+  constexpr std::int64_t kMb = std::int64_t{1024} * 1024;
+  return resident * ::sysconf(_SC_PAGESIZE) / kMb;
+}
+
 void Report(const StressApp& acceptor_app, const Direction& orders, const Direction& echoes,
             std::int64_t elapsed) {
-  std::cout << std::format("[{:4}s] recvAcc={} recvIni={} logons={} logouts={} fds={}\n", elapsed,
-                           orders.tracker.Count(), echoes.tracker.Count(), acceptor_app.Logons(),
-                           acceptor_app.Logouts(), CountFds());
+  std::cout << std::format("[{:4}s] recvAcc={} recvIni={} logons={} logouts={} fds={} rssMB={}\n",
+                           elapsed, orders.tracker.Count(), echoes.tracker.Count(),
+                           acceptor_app.Logons(), acceptor_app.Logouts(), CountFds(), RssMb());
   std::cout.flush();
 }
 
 void RunChaos(const Rig& rig, Chaos& chaos, const StressApp& acceptor_app, const Direction& orders,
               const Direction& echoes) {
-  constexpr std::int64_t kReportEvery = 5;
   const auto start = Clock::now();
   std::int64_t last_report = 0;
+  const int gap = rig.options.chaos_ms;
   while (Clock::now() - start < seconds(rig.options.seconds)) {
-    std::this_thread::sleep_for(milliseconds(chaos.Pick(150, 499)));
+    std::this_thread::sleep_for(milliseconds(chaos.Pick(gap, gap + 349)));
     const std::int64_t elapsed = std::chrono::duration_cast<seconds>(Clock::now() - start).count();
-    if (elapsed >= last_report + kReportEvery) {
+    if (elapsed >= last_report + rig.options.report_seconds) {
       last_report = elapsed;
       Report(acceptor_app, orders, echoes, elapsed);
     }
@@ -876,6 +970,10 @@ int Run(const Options& options) {
   const int fds_before = CountFds();
   Direction orders;
   Direction echoes;
+  if (options.soak) {
+    orders.sequences.Disable();
+    echoes.sequences.Disable();
+  }
   StressApp acceptor_app(true, options.echo, echoes, orders);
   StressApp initiator_app(false, options.echo, orders, echoes);
   Rig rig(options, acceptor_app, initiator_app);
