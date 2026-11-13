@@ -179,6 +179,20 @@ The send path does not notice the flusher (within the run-to-run noise). A flush
 `fdatasync`s (body, seqnums), so the window is about the interval plus up to two flushes; the
 spike sleeps a full interval after each flush, which the build should not (sleep to the next tick).
 
+15.6 as built (14 Nov 2026), the same Rocky pod: before = 15.1 (90665b83, no flusher), after =
+26c79293, file mode, 100,000 orders and 5,000 round trips, 3 interleaved rounds (the before build ran
+twice a round), medians:
+
+| Build | msg/s | RTT p50 µs | p99.9 µs |
+|---|---|---|---|
+| before (6 runs) | 259,776 | 26.4 | 346 |
+| after, `FileStoreFlushInterval=0` | 277,588 | 30.2 | 308 |
+| after, `FileStoreFlushInterval=5` | 244,442 | 31.3 | 236 |
+
+Throughput and p99.9 hold. The p50 median is 15 % higher, over D9's 10 % on paper, but single runs
+of one build range 22–32 µs and with the flush off the send path only gains an atomic check; to
+measure again with more runs before 15.6 merges.
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4
