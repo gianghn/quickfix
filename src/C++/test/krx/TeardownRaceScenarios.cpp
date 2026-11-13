@@ -652,7 +652,10 @@ std::vector<FIX::socket_handle> ConnectStorm(int port, const std::atomic<bool>& 
   std::vector<FIX::socket_handle> sockets;
   while (!stop.load()) {
     const FIX::socket_handle socket = FIX::socket_createConnector();
-    if (FIX::socket_connect(socket, "127.0.0.1", port) < 0) {
+    // With no listener, Linux can connect a socket to itself when its own port is the port it
+    // dials (both in the ephemeral range): no acceptor ever saw that one (CI, 2 in 100 rounds).
+    if (FIX::socket_connect(socket, "127.0.0.1", port) < 0 ||
+        static_cast<std::uint16_t>(FIX::socket_hostport(socket)) == port) {
       FIX::socket_close(socket);
       continue;
     }
