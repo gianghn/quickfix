@@ -576,6 +576,21 @@ spikes on `spike/v1-p15-group-commit` (local, not for merge), measured.
 its own namespace `krx-bench` (owner, 13 Nov 2026), quota 6 CPU, request 150m because the nodes'
 requests were full; Windows keeps the stdio write path.
 **Away from the spec:** none.
-**Left for the owner:** Q18 (1a, 1b or neither; the plan's recommendation depends on 11.7's
-production disk); 15.1's file p99.9 to measure again on a quiet node before it merges (D9);
-delete namespace `krx-bench` when done (`kubectl delete ns krx-bench`).
+**Left for the owner:** ~~Q18~~ decided 14 Nov 2026 (below); ~~15.1's file p99.9 on a quiet
+node~~ measured on Rocky 9 (no percentile worse); delete namespace `krx-bench` when done
+(`kubectl delete ns krx-bench`).
+
+**Update 14 Nov 2026.** Rocky Linux 9 (userspace in a lab pod): today's sync mode is about
+1.5 k msg/s, 96 % of each send in `fdatasync` (about 0.6 ms on the lab NVMe); the Mac's 27 k was a
+cache-only `fsync`. Spiked and measured: 1a, 1b, and batch send (5.5 k / 18.3 k / 56.8 k msg/s at
+batches of 4 / 16 / 64, nothing lost on power cut). `strace` cannot run on the lab nodes (AppArmor
+blocks `ptrace`); the per-step profile came from timers in the spike build.
+**Decision (owner, Q18):** with `FileStoreSync=Y`, batch send (15.7): the gateway drains each
+session's order queue into one call (one sender thread, never waiting to fill a batch, at most 64);
+`send()` keeps its meaning. With `FileStoreSync=N`, background flush (15.6): `send()` as in file
+mode, a flusher `fdatasync`s every few ms; a host crash loses up to about one interval of sent
+messages, so the Q1 runbook (seqnum fix with HOSE, order reconciliation) stays, with a signed risk
+record (13.8). 1a and 1b are not built (rows 15.7–15.11 dropped).
+**Next:** spike 15.6 on the Rocky pod (speed, per-message latency, the real loss window at 1, 5,
+10 ms), then 15.6 and 15.7 red first (rows 15.12–15.17), each its own PR on `agent/v1-p15a`;
+quickfix-rs binding and the gateway's sender loop for 15.7 in Phases 9–10.
