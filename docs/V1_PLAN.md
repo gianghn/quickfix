@@ -70,6 +70,11 @@ The owner may change any of these before its phase starts.
 | Q6 | How is the exchange link encrypted (P2-2)? | no TLS on the leased line · stunnel/HAProxy in front · built-in ThreadedSSL with #677/#751/#713 | stunnel/HAProxy in front | Phases 7, 13 | **no TLS** on the leased line (owner, 12 Nov 2026): 7.4 (the SSL picks) is not needed; Phase 13 records the unencrypted link as an accepted risk |
 | Q7 | Do we offer our fixes upstream (public PRs)? | yes, after go-live · yes, as each lands · no | yes, after go-live | Phase 12 | **no** (owner, 12 Nov 2026): fixes stay in the fork |
 | Q8 | Who signs the P1 risk records and the go/no-go (engineering, risk, compliance, operations)? | named approvers per area · CTO alone | named approvers per area | Phase 14 | **the CTO alone** (owner, 12 Nov 2026) |
+| Q9 | The nightly mutation job takes over 2 of its 3 hours: how do we keep it inside the limit? | one job per test binary · a 6 h limit · fewer mutants nightly, all weekly | one job per test binary | CI | **one job per binary** (owner, 13 Nov 2026) |
+| Q10 | What mutation score must the whole critical code reach (50–51 % now)? | report only, never drop · 70 % by release · 80 % by release | report only | Phase 12 | **report only** (owner, 13 Nov 2026): the PR gate stays 80 % on changed lines; the nightly score is recorded in `test/krx/BASELINE.md` and may not drop between releases |
+| Q11 | When are the initiator's `stop()` order and `onStop` spin fixed (the acceptor's were, 6.5 and 6.6)? | Phase 8.7, red first · now without a red test · not at all | Phase 8.7, red first | Phase 8 | **Phase 8.7, red first** (owner, 13 Nov 2026) |
+| Q12 | Where do Phase 8's long runs (chaos, TSan hours, soak, fuzzing) run? | a lab machine · GitHub Actions · this Mac in Docker | a lab machine | Phase 8 | **the lab Kubernetes cluster** (owner, 13 Nov 2026): RKE2, 3 × 16 CPU; namespace `krx-soak` with its own quota; a privileged init container only sets `vm.mmap_rnd_bits=28` for TSan; Jobs started by a script in `test/krx/k8s/` |
+| Q13 | Keep the decisions taken without the owner in Phases 6–7? | keep · revisit | keep | — | **keep** (owner, 13 Nov 2026): the `GapFill to N dropped K queued messages` event (7.1), the #755 pick (7.6), `onLogout` after the session reset and outside the lock (6.4) |
 
 ## Ground rules
 
@@ -92,8 +97,8 @@ The owner may change any of these before its phase starts.
 | 3 | Sockets never freeze a session | 3.1–3.7 | P0-3, P1-3, P1-4, P1-10, P1-12 | done (#25–#35); 3.8 (benchmark) later |
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | done (#36–#41); the crash runbook (Q1) to write |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
-| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | built, waiting for merge: 6.1 and 6.2 (#46), 6.4 (#47), 6.5 (#48), 6.6 (#49), 6.3's TSan row (#50; 6.3 itself #28, #29) |
-| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | built, waiting for merge: 7.1 (#51), 7.2 (#52), 7.5 (#53), 7.6 (#54, #55), 7.7 (ledger lines, upstream tests in `ut`); 7.3 and 7.4 not needed (Q5, Q6) |
+| 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
+| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
@@ -109,7 +114,7 @@ The owner may change any of these before its phase starts.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
 4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
 5. ~~Phase 3 handover~~ written (Handover 3, in #35).
-6. ~~Phase 6~~ merged (#45–#50, Handover 6). ~~Phase 7~~ built (#51–#55, Handover 7). **Owner:** merge #51–#55 in order. Next: Phase 8 (gap root cause, long runs; 8.7 also takes the initiator's stop order and `onStop` spin): no owner question blocks it.
+6. ~~Phase 6~~ merged (#45–#50, Handover 6). ~~Phase 7~~ merged (#51–#55, Handover 7). Next: Phase 8 (gap root cause, long runs on the lab Kubernetes cluster, Q12; 8.7 also takes the initiator's stop order and `onStop` spin, Q11). The nightly mutation job runs one job per binary (Q9).
 7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
 ## Phases
