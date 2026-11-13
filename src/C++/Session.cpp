@@ -348,7 +348,10 @@ void Session::nextLogout( const Message& logout, const UtcTimeStamp& now )
   else
     m_state.onEvent( "Received logout response" );
 
-  m_state.incrNextTargetMsgSeqNum();
+  // KRX fork (U-4, P0-10): only the next message moves the expected seqnum on. A Logout above a
+  // gap moved it past the first missing message, which then counted as received and was never
+  // asked for again.
+  if ( isNextTarget( logout ) ) m_state.incrNextTargetMsgSeqNum();
   if ( m_resetOnLogout ) m_state.reset( m_timestamper() );
   disconnect();
 }
@@ -356,8 +359,13 @@ void Session::nextLogout( const Message& logout, const UtcTimeStamp& now )
 void Session::nextReject( const Message& reject, const UtcTimeStamp& now )
 {
   if ( !verify( reject, false, true ) ) return ;
-  m_state.incrNextTargetMsgSeqNum();
+  if ( isNextTarget( reject ) ) m_state.incrNextTargetMsgSeqNum();  // as in nextLogout (U-4)
   nextQueued( now );
+}
+
+bool Session::isNextTarget( const Message& message )
+{
+  return message.getHeader().getField<MsgSeqNum>() == getExpectedTargetNum();
 }
 
 void Session::dropQueuedBelow( int newSeqNo )

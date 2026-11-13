@@ -334,6 +334,7 @@ private:
   void nextReject( const Message&, const UtcTimeStamp& now );
   void nextSequenceReset( const Message&, const UtcTimeStamp& now );
   void dropQueuedBelow( int newSeqNo ); // KRX fork (P1-5)
+  bool isNextTarget( const Message& message ); // KRX fork (U-4)
   void nextResendRequest( const Message&, const UtcTimeStamp& now );
 
   void generateLogon();

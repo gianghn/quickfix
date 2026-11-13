@@ -768,6 +768,60 @@ SCENARIO("At most 10,000 messages wait above a gap, and the resend brings the re
   }
 }
 
+namespace {
+// The counterparty skips message 2, sends 3, then `admin` (its MsgType set) as 4; the session's
+// next expected target seqnum after that.
+int ExpectedAfterGapThen(const krx::SessionPair& pair, FIX::Message admin) {
+  FIX::Message order;
+  order.getHeader().setField(FIX::MsgType("j"));
+  order.setField(FIX::RefMsgType("D"));
+  order.setField(FIX::BusinessRejectReason(0));
+  pair.Write(pair.FromCounterparty(order, 3));
+  REQUIRE(pair.WaitForEvent("Sent ResendRequest", kWait));
+  pair.Write(pair.FromCounterparty(std::move(admin), 4));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  return pair.Store()->getNextTargetMsgSeqNum();
+}
+}  // namespace
+
+// Row U-4 (8.2, P0-10): a Logout or Reject above a gap moved the expected seqnum on by one, so the
+// first missing message counted as received and the resend after the next logon skipped it
+// (krx_stress echo-on: single orders lost with no GapFill or Reject; the research's seq 26173).
+SCENARIO("A Logout above a gap leaves the missing message to the resend",
+         "[krx][v1][security][u-4]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU4L");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3, then logs out as 4") {
+      FIX::Message logout;
+      logout.getHeader().setField(FIX::MsgType("5"));
+      const int expected = ExpectedAfterGapThen(pair, logout);
+      THEN("the session still expects message 2") {
+        INFO("expects " << expected << "; events:\n" << pair.Events().Dump());
+        REQUIRE((expected == 2));
+      }
+    }
+  }
+}
+
+SCENARIO("A Reject above a gap leaves the missing message to the resend",
+         "[krx][v1][security][u-4]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU4R");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3, then a Reject as 4") {
+      FIX::Message reject;
+      reject.getHeader().setField(FIX::MsgType("3"));
+      reject.setField(FIX::RefSeqNum(1));
+      const int expected = ExpectedAfterGapThen(pair, reject);
+      THEN("the session still expects message 2") {
+        INFO("expects " << expected << "; events:\n" << pair.Events().Dump());
+        REQUIRE((expected == 2));
+      }
+    }
+  }
+}
+
 SCENARIO("A signal storm on an idle session causes no disconnect", "[krx][v1][security][p1-3]") {
   GIVEN("a logged-on, idle session") {
     InstallInterruptingHandler();
