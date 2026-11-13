@@ -69,7 +69,7 @@ ThreadedSocketConnection::~ThreadedSocketConnection()
 {
   if ( m_pSession )
   {
-    m_pSession->releaseResponder( this ); // KRX fork (P0-11): was setResponder( 0 )
+    m_pSession->setResponder( 0 );
     Session::unregisterSession( m_pSession->getSessionID() );
   }
   // The one place the socket's number is released; the owner deletes the connection when no
@@ -259,7 +259,12 @@ bool ThreadedSocketConnection::read()
   catch ( std::exception& e )
   {
     if( m_disconnect )
+    {
+      // KRX fork (P0-11): when this connection closed itself, the session drops it as on any other
+      // drop; when the session closed it, releaseResponder does nothing.
+      if( m_pSession ) m_pSession->releaseResponder( this );
       return false;
+    }
 
     if( m_pSession )
     {

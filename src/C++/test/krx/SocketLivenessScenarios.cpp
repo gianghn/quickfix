@@ -746,12 +746,14 @@ SCENARIO("When the primary exchange host is unreachable the initiator reaches th
       const bool reached = exchange.Events().WaitFor("Accepted connection from", kWait);
       const bool connected = gateway.Events().WaitFor("Connection succeeded", kWait);
       const auto took = std::chrono::steady_clock::now() - started;
-      THEN("it tried the primary first and reached the backup within 5 seconds") {
+      // The session writes through the connection only once it is connected (P0-11).
+      const bool logged_on = gateway.Events().WaitFor("Received logon response", kWait);
+      THEN("it tried the primary first, reached the backup within 5 seconds and logged on") {
         INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
              << " ms; gateway events:\n"
              << gateway.Events().Dump());
         REQUIRE((gateway.Events().Contains(std::string("Connecting to ") + kUnreachableHost) &&
-                 reached && connected && took < std::chrono::seconds(5)));
+                 reached && connected && took < std::chrono::seconds(5) && logged_on));
       }
     }
   }

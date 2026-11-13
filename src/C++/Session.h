@@ -262,8 +262,9 @@ public:
   void next( const std::string&, const UtcTimeStamp& now, bool queued = false );
   void next( const Message&, const UtcTimeStamp& now, bool queued = false );
   void disconnect();
-  // KRX fork (P0-11): the connection `pR` is going away. While it is still the session's responder
-  // (it closed itself), the session disconnects as on any other drop: logon state cleared, onLogout.
+  // KRX fork (P0-11): the connection `pR` has stopped reading. While it is still the session's
+  // responder (it closed itself), the session disconnects as on any other drop: logon state
+  // cleared, onLogout called.
   void releaseResponder( Responder* pR );
 
   int getExpectedSenderNum() { return m_state.getNextSenderMsgSeqNum(); }
