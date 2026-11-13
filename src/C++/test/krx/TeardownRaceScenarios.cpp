@@ -7,20 +7,31 @@
 // Rows 6.1 and 6.2 (P0-11): a connection that closes itself and is deleted while gateway threads
 // send went around Session::disconnect(): the session kept its logon state, never called onLogout,
 // and cleared its responder without the lock a sender holds while it writes through it.
+#include <sys/stat.h>
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <catch_amalgamated.hpp>
 
+#include "Application.h"
+#include "Exceptions.h"
 #include "FieldTypes.h"
 #include "FixFields.h"
 #include "Message.h"
 #include "Mutex.h"
 #include "SessionPair.h"
+#include "SessionSettings.h"
 #include "SessionState.h"
+#include "ThreadedSocketAcceptor.h"
+#include "Utility.h"
 
 namespace {
 
@@ -107,6 +118,49 @@ struct Reads {
   int whole_times{0};  // timestamps of the writer's day, never torn
   int logged_on{0};    // reads that saw both logon flags set
 };
+
+// A port no one listens on now.
+int FreePort() {
+  const FIX::socket_handle probe = FIX::socket_createAcceptor(0, true);
+  const int port = static_cast<std::uint16_t>(FIX::socket_hostport(probe));  // a short: 32768+
+  FIX::socket_close(probe);
+  return port;
+}
+
+// Whether a new listening socket can take `port` now (no reuse: an open listener holds it).
+bool CanListenOn(int port) {
+  const FIX::socket_handle socket = FIX::socket_createAcceptor(port, false);
+  if (!FIX::socket_isValid(socket)) {
+    return false;
+  }
+  FIX::socket_close(socket);
+  return true;
+}
+
+// How many file descriptors the process has open.
+int OpenDescriptors() {
+  int open = 0;
+  for (int descriptor = 0; descriptor < 4096; ++descriptor) {
+    struct stat status{};
+    open += fstat(descriptor, &status) == 0 ? 1 : 0;
+  }
+  return open;
+}
+
+// Settings for a threaded acceptor with one session on each of `ports`.
+FIX::SessionSettings AcceptorOn(const std::vector<int>& ports) {
+  std::string text =
+      "[DEFAULT]\nConnectionType=acceptor\nSocketReuseAddress=Y\nStartTime=00:00:00\n"
+      "EndTime=00:00:00\nUseDataDictionary=N\n";
+  for (const int port : ports) {
+    text += "[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGW\nTargetCompID=KRXSTOP" +
+            std::to_string(port) + "\nSocketAcceptPort=" + std::to_string(port) + "\n";
+  }
+  std::istringstream stream(text);
+  FIX::SessionSettings settings;
+  stream >> settings;
+  return settings;
+}
 
 // Reads every racy field kIncrements times, as the reading thread does without the session lock.
 Reads ReadStateRepeatedly(const FIX::SessionState& state) {
@@ -256,6 +310,36 @@ SCENARIO("onLogout runs after the session lock is released", "[krx][v1][p1-2]") 
       THEN("the other thread's send returns while onLogout is still running") {
         INFO(pair.Events().Dump());
         REQUIRE((!pair.LoggedOn() && pair.ProbeReturned()));
+      }
+    }
+  }
+}
+
+SCENARIO("Repeated forced and graceful acceptor stops leave no port or descriptor behind",
+         "[krx][v1][tsan][p1-7]") {
+  GIVEN("a threaded acceptor listening on four ports") {
+    const std::vector<int> ports{FreePort(), FreePort(), FreePort(), FreePort()};
+    const FIX::SessionSettings settings = AcceptorOn(ports);
+    FIX::NullApplication application;
+    FIX::MemoryStoreFactory store;
+    const int open_before = OpenDescriptors();
+    WHEN("it is started and stopped at once 40 times, forced and graceful in turn") {
+      int failed_starts = 0;
+      for (int i = 0; i < 40; ++i) {
+        FIX::ThreadedSocketAcceptor acceptor(application, store, settings);
+        try {
+          acceptor.start();
+        } catch (const FIX::RuntimeError&) {
+          ++failed_starts;  // a port still held by a listener from an earlier round
+        }
+        acceptor.stop(i % 2 == 0);
+      }
+      THEN("every start could listen, and every port and descriptor is free again") {
+        const bool ports_free = std::ranges::all_of(ports, CanListenOn);
+        const int open_after = OpenDescriptors();
+        INFO(failed_starts << " failed starts; descriptors " << open_before << " -> "
+                           << open_after);
+        REQUIRE((failed_starts == 0 && ports_free && open_after == open_before));
       }
     }
   }
