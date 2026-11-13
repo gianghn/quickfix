@@ -246,6 +246,21 @@ SCENARIO("A dropped connection always clears the session's logon state", "[krx][
   }
 }
 
+SCENARIO("onLogout runs after the session lock is released", "[krx][v1][p1-2]") {
+  GIVEN("a logged-on session whose gateway sends an order from another thread in onLogout") {
+    krx::SessionPair pair("KRXLO64");
+    LogOn(pair);
+    pair.ProbeDuringLogout([&pair] { pair.Send(Order()); });
+    WHEN("the gateway disconnects the session") {
+      pair.Disconnect();
+      THEN("the other thread's send returns while onLogout is still running") {
+        INFO(pair.Events().Dump());
+        REQUIRE((!pair.LoggedOn() && pair.ProbeReturned()));
+      }
+    }
+  }
+}
+
 SCENARIO("A copy of a locked mutex is a new, unlocked mutex", "[krx][v1][tsan][p1-1]") {
   GIVEN("a mutex this thread holds, and a copy of it") {
     FIX::Mutex mutex;

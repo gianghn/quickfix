@@ -7,6 +7,8 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <functional>
+#include <future>
 #include <memory>
 #include <set>
 #include <string>
@@ -89,6 +91,7 @@ SessionPair::~SessionPair() {
   if (reader_.joinable()) {
     reader_.join();
   }
+  application_.JoinProbe();
 }
 
 void SessionPair::Write(std::string_view bytes) const {
@@ -190,6 +193,25 @@ std::string SessionPair::FromCounterparty(FIX::Message message, int seq_num) con
   header.setField(FIX::MsgSeqNum(seq_num));
   header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
   return message.toString();
+}
+
+void LogonWatcher::onLogout(const FIX::SessionID& /*id*/) {
+  logged_on_.store(false);
+  std::function<void()> probe;
+  {
+    const std::scoped_lock lock(mutex_);
+    probe.swap(probe_);
+  }
+  if (!probe) {
+    return;
+  }
+  const auto returned = std::make_shared<std::promise<void>>();
+  const auto future = returned->get_future();
+  probe_thread_ = std::thread([probe = std::move(probe), returned] {
+    probe();
+    returned->set_value();
+  });
+  probe_returned_.store(future.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
 }
 
 bool EventLog::Contains(std::string_view text) const {

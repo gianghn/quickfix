@@ -777,11 +777,12 @@ void Session::disconnect()
     }
   }
 
+  bool loggedOut = false;
   if ( m_state.receivedLogon() || m_state.sentLogon() )
   {
     m_state.receivedLogon( false );
     m_state.sentLogon( false );
-    m_application.onLogout( m_sessionID );
+    loggedOut = true;
   }
 
   m_state.sentLogout( false );
@@ -793,6 +794,15 @@ void Session::disconnect()
     m_state.reset( m_timestamper() );
 
   m_state.resendRange( 0, 0 );
+
+  // KRX fork (P1-2): onLogout runs once the session is fully reset and without our hold on
+  // m_mutex, so a gateway thread it waits for can send. Still under the lock when the caller holds
+  // it too: a store failure in sendRaw, a resend, or setResponder's reset outside session time.
+  if ( loggedOut )
+  {
+    const ReverseLocker unlocked( m_mutex );
+    m_application.onLogout( m_sessionID );
+  }
 }
 
 void Session::releaseResponder( Responder* pR )

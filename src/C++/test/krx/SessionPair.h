@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -80,7 +81,24 @@ class LogonWatcher : public FIX::Application {
 
   void onLogon(const FIX::SessionID& /*id*/) override { logged_on_.store(true); }
 
-  void onLogout(const FIX::SessionID& /*id*/) override { logged_on_.store(false); }
+  // From the next onLogout on, `probe` runs on its own thread while onLogout waits up to a second
+  // for it, as a gateway's onLogout handing work to another of its threads might.
+  void ProbeDuringLogout(std::function<void()> probe) {
+    const std::scoped_lock lock(mutex_);
+    probe_ = std::move(probe);
+  }
+
+  // True when the probe returned while onLogout was still waiting for it.
+  [[nodiscard]] bool ProbeReturned() const { return probe_returned_.load(); }
+
+  // Waits for the probe's thread; before the session it uses goes away.
+  void JoinProbe() {
+    if (probe_thread_.joinable()) {
+      probe_thread_.join();
+    }
+  }
+
+  void onLogout(const FIX::SessionID& /*id*/) override;
 
   void toAdmin(FIX::Message& /*message*/, const FIX::SessionID& /*id*/) override {
     if (throw_from_admin_.load()) {
@@ -102,6 +120,10 @@ class LogonWatcher : public FIX::Application {
   std::atomic<bool> logged_on_{false};
   std::atomic<bool> throw_from_app_{false};
   std::atomic<bool> throw_from_admin_{false};
+  std::mutex mutex_;
+  std::function<void()> probe_;
+  std::thread probe_thread_;
+  std::atomic<bool> probe_returned_{false};
 };
 
 // A MemoryStore whose next sender seqnum write can be made to fail once, as FileStore's does when
@@ -227,6 +249,13 @@ class SessionPair {
   void ThrowFromApp() { application_.ThrowFromApp(); }
 
   void ThrowFromAdmin() { application_.ThrowFromAdmin(); }
+
+  // See LogonWatcher::ProbeDuringLogout and ProbeReturned.
+  void ProbeDuringLogout(std::function<void()> probe) {
+    application_.ProbeDuringLogout(std::move(probe));
+  }
+
+  [[nodiscard]] bool ProbeReturned() const { return application_.ProbeReturned(); }
 
   [[nodiscard]] int SendTimeoutMs() { return session_.getSendTimeoutMs(); }
 
