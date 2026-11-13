@@ -31,8 +31,11 @@
 #include "SessionID.h"
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <set>
 #include <map>
+#include <string>
+#include <thread>
 
 namespace FIX
 {
@@ -67,6 +70,8 @@ private:
   void processStream();
   bool send( const std::string& );
   bool setSession( const std::string& msg );
+  bool waitWritable( std::chrono::steady_clock::time_point deadline );
+  bool feedDrained();
 
   socket_handle m_socket;
   char m_buffer[BUFSIZ];
@@ -87,6 +92,14 @@ private:
   bool m_socketConfigured{ false };
   // KRX fork (P1-10): when read() last ran the session's timers (Session::next(now)).
   std::chrono::steady_clock::time_point m_lastTimerCheck;
+  // KRX fork (U-6, Q14): while the reading thread waits to send (a resend), it keeps reading
+  // what the peer sends into m_drained, so a peer resending to us at the same time can go on; read()
+  // hands it to the parser, in order, before it reads the socket again.
+  static constexpr std::size_t MAX_DRAINED = std::size_t{ 64 } * 1024 * 1024;
+  std::atomic<std::thread::id> m_reader{};
+  std::string m_drained;
+  std::size_t m_drainedAt{ 0 };
+  bool m_peerClosed{ false };
 #if _MSC_VER
   fd_set m_fds;
 #endif

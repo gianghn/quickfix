@@ -646,6 +646,44 @@ SCENARIO("A large resend stops when its socket is shut down", "[krx][v1][securit
   }
 }
 
+// Row U-6 (8.5, owner decision Q14): after an outage both sides resend, each from its reading
+// thread, so neither read and both sends timed out, again on every reconnect (krx_stress echo-on).
+// The counterparty here only reads once its own backlog is written.
+namespace {
+std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int count) {
+  std::string backlog;
+  for (int seq = first_seq; seq < first_seq + count; ++seq) {
+    FIX::Message message;
+    message.getHeader().setField(FIX::MsgType("j"));
+    message.setField(FIX::RefMsgType("D"));
+    message.setField(FIX::BusinessRejectReason(0));
+    message.setField(FIX::Text(std::string(1024, 'y')));
+    backlog += pair.FromCounterparty(message, seq);
+  }
+  return backlog;
+}
+}  // namespace
+
+SCENARIO("A resend completes while the counterparty is resending its own backlog",
+         "[krx][v1][security][u-6]") {
+  GIVEN("a logged-on session with 2000 messages to resend and a 1 s send timeout") {
+    krx::PairOptions options = WithManyStoredMessages("KRXRSU6");
+    options.send_timeout_ms = 1000;
+    krx::SessionPair pair("KRXRSU6", options);
+    LogOn(pair);
+    WHEN("the counterparty asks for them, then writes 2000 messages of its own before reading") {
+      AskForMessagesFrom(pair, 2);
+      const bool written = pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), kWait);
+      const int resent = written ? ReadResent(pair, kResent) : 0;
+      THEN("every message is resent and no send timed out") {
+        INFO("backlog written: " << written << ", " << resent << " resent; events:\n"
+                                 << pair.Events().Dump());
+        REQUIRE((written && resent == kResent && !pair.Events().Contains("Send timed out")));
+      }
+    }
+  }
+}
+
 SCENARIO("A signal storm on an idle session causes no disconnect", "[krx][v1][security][p1-3]") {
   GIVEN("a logged-on, idle session") {
     InstallInterruptingHandler();

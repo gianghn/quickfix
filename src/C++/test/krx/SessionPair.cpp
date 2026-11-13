@@ -104,6 +104,25 @@ void SessionPair::Write(std::string_view bytes) const {
   }
 }
 
+bool SessionPair::WriteWithin(std::string_view bytes, std::chrono::milliseconds timeout) const {
+  // Writable means room for at least the low-water mark (2048 bytes by default), so a chunk of
+  // that size never blocks.
+  constexpr std::size_t kChunk = 2048;
+  while (!bytes.empty()) {
+    pollfd ready{.fd = peer_, .events = POLLOUT, .revents = 0};
+    if (poll(&ready, 1, static_cast<int>(timeout.count())) <= 0) {
+      return false;
+    }
+    const std::string chunk(bytes.substr(0, kChunk));
+    const ssize_t sent = FIX::socket_send(peer_, chunk.c_str(), chunk.size());
+    if (sent <= 0) {
+      return false;
+    }
+    bytes.remove_prefix(static_cast<std::size_t>(sent));
+  }
+  return true;
+}
+
 void SessionPair::WriteByteByByte(std::string_view bytes) const {
   for (std::size_t i = 0; i < bytes.size(); ++i) {
     Write(bytes.substr(i, 1));

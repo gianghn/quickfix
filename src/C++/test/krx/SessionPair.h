@@ -229,6 +229,8 @@ class SessionPair {
 
   // Bytes the session will read, all at once or one send per byte.
   void Write(std::string_view bytes) const;
+  // The same, unless the session takes no byte for `timeout`; true when all went out.
+  [[nodiscard]] bool WriteWithin(std::string_view bytes, std::chrono::milliseconds timeout) const;
   void WriteByteByByte(std::string_view bytes) const;
   // The next whole message the session sent; empty after the timeout or when the session closed.
   [[nodiscard]] std::string ReadFrame(std::chrono::milliseconds timeout);
