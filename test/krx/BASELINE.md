@@ -193,6 +193,37 @@ Throughput and p99.9 hold. The p50 median is 15 % higher, over D9's 10 % on pape
 of one build range 22–32 µs and with the flush off the send path only gains an atomic check; to
 measure again with more runs before 15.6 merges.
 
+## 15.6 and 15.7 as built, rke2-node3, 14 Nov 2026
+
+The Rocky 9 pod moved to `rke2-node3` (node1 was at 99 % CPU with Phase 8's TSan soak jobs; node3
+at 61 %, still running three soak jobs, so expect noise). Store on the node's LVM ext4 (consumer
+NVMe). Before = 15.1 (90665b83), after = 0780e5f9. Interleaved rounds, medians; 300 round trips a
+run, so p99.9 is rough.
+
+15.7, `FileStoreSync=Y`, one sender, 3 rounds:
+
+| Batch | msg/s | × today | call p50 ms | call p99 ms |
+|---|---|---|---|---|
+| 1 (today's `send()`) | 1,110 | 1.0 | — | — |
+| 4 | 3,730 | 3.4 | 0.89 | 2.7 |
+| 16 | 11,768 | 10.6 | 1.14 | 3.0 |
+| 64 | 32,243 | 29.0 | 1.43 | 5.2 |
+
+15.6, file mode, 5 rounds:
+
+| Build | msg/s | RTT p50 µs |
+|---|---|---|
+| before (15.1) | 179,485 | 22.7 |
+| after, `FileStoreFlushInterval=0` | 189,520 | 21.3 |
+| after, `FileStoreFlushInterval=5` | 134,061 | 23.3 |
+
+With the flush off, 15.6 does not regress (D9 holds; the earlier +15 % p50 was noise). With the
+flush on, throughput is 25 % lower on this busy node (6 % on the quiet one) and 2 of 5 runs had a
+p99 near 3 ms: on ext4 an `fdatasync` of a growing file commits the journal, and an append that
+grows the file can wait for that commit. Pre-sizing the body file (`fallocate`) would keep most
+appends from changing the file's size; XFS (Rocky 9's default) may behave differently. To check
+on the production disk (11.7).
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

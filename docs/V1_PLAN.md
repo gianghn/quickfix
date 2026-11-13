@@ -591,6 +591,25 @@ session's order queue into one call (one sender thread, never waiting to fill a 
 mode, a flusher `fdatasync`s every few ms; a host crash loses up to about one interval of sent
 messages, so the Q1 runbook (seqnum fix with HOSE, order reconciliation) stays, with a signed risk
 record (13.8). 1a and 1b are not built (rows 15.7–15.11 dropped).
-**Next:** spike 15.6 on the Rocky pod (speed, per-message latency, the real loss window at 1, 5,
-10 ms), then 15.6 and 15.7 red first (rows 15.12–15.17), each its own PR on `agent/v1-p15a`;
-quickfix-rs binding and the gateway's sender loop for 15.7 in Phases 9–10.
+**Next:** ~~spike 15.6~~ (loss window p99 9.2 ms at 5 ms, send path unchanged); ~~15.6 and 15.7
+red first~~ built (below); quickfix-rs binding and the gateway's sender loop for 15.7 in
+Phases 9–10.
+
+**Update 14 Nov 2026 (15.6, 15.7 built).** 15.6 background flush (78cab7d4): setting
+`FileStoreFlushInterval`; red 3 of 3 (rows 15.12–15.14) → green. 15.7 batch send (e3374ac0):
+`Session::send( std::vector<Message>& )`, `Session::sendToTarget( vector, SessionID )`,
+`MessageStore::beginBatch`/`endBatch`; red 3 of 3 (rows 15.15–15.17) → green. `krx_bench` takes
+`flush_ms` and `batch`. `krx_ut` 118 cases and `ut` 53 pass (Release, Mac); TSan (Mac) clean on 25
+store and send scenarios; `lint.sh` passes. Linux ASan/TSan and Mull run in CI once pushed.
+**Measured (Rocky 9 pod on rke2-node3, busy):** 15.7 batch 4 / 16 / 64 = 3.4× / 10.6× / 29× today's
+sync send (32 k msg/s at 64, every order on disk in 1.4 ms p50). 15.6 flush off: no regression
+(D9 holds); flush 5 ms: −25 % throughput on the busy node (−6 % quiet), occasional 3 ms p99 from
+ext4 journal commits on the growing body file.
+**Decisions taken:** a batch result is the count sent from the first (every order before it went
+out, none after); a refused message ends the batch there; the batch's wire text is logged when
+written, not when stored; a failed flush fails the next `set()`, not the session at once (the store
+cannot reach the session); `MessageStore::beginBatch`/`endBatch` default to nothing, so other
+stores (and quickfix-rs's) need no change.
+**Left for the owner:** push and PRs (none opened yet); pre-sizing the body file (`fallocate`) to
+avoid the ext4 journal stalls with background flush, as a follow-up item if 11.7 shows them on the
+production disk (XFS); delete namespace `krx-bench` when done.
