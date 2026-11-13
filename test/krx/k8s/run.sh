@@ -4,7 +4,7 @@
 # commit, builds krx_stress in its variant and runs it; its log is the run's record.
 #
 #   run.sh setup                                  the namespace and its quota (namespace.yaml)
-#   run.sh start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] -- STRESS_ARGS...
+#   run.sh start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] -- STRESS_ARGS...
 #                                                 VARIANT: release, asan (ASan+UBSan) or tsan;
 #                                                 fuzz: krx_fuzz instead (ASan, clang 18),
 #                                                 STRESS_ARGS are libFuzzer's (8.6);
@@ -17,10 +17,10 @@
 # e.g. 50 ASan chaos runs, 10 at a time (8.3):
 #   run.sh start chaos-asan asan 50 10 -- 90 4 3 7700 {seed} /tmp/w --no-echo
 # an 8 h soak (8.5):
-#   run.sh start soak release 1 1 --hours 9 -- 28800 4 3 7700 1 /tmp/w --soak --rate=200 \
+#   run.sh start soak release 1 1 --hours 9 --cpu 1 -- 28800 4 3 7700 1 /tmp/w --soak --rate=200 \
 #     --chaos-ms=5000 --report=60 --settle=600
 # 120 CPU-hours of fuzzing, about 24 per mode (8.6):
-#   run.sh start fuzz fuzz 10 10 --hours 13 -- -max_total_time=43200 -rss_limit_mb=4096
+#   run.sh start fuzz fuzz 10 10 --hours 13 --cpu 1 -- -max_total_time=43200 -rss_limit_mb=4096
 # The commit is HEAD, which must be pushed (the pods clone it from GitHub). KUBECONFIG must point
 # at the lab cluster (rke2-lab-ansible/fetched/kubeconfig.yaml).
 set -euo pipefail
@@ -28,6 +28,7 @@ set -euo pipefail
 readonly NAMESPACE=krx-soak
 readonly REPO=https://github.com/gianghn/quickfix.git
 ENGINE="" # --engine: the engine's sources (src/C++ but its tests) from this commit instead
+CPU=2     # --cpu: CPUs a pod requests (it may use twice that); a soak or a fuzzer needs 1
 HERE=$(cd "$(dirname "$0")" && pwd)
 readonly HERE
 
@@ -148,8 +149,8 @@ YAML
             - name: NODE
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
           resources:
-            requests: {cpu: "2", memory: 3Gi, ephemeral-storage: 4Gi}
-            limits: {cpu: "4", memory: 6Gi, ephemeral-storage: 8Gi}
+            requests: {cpu: "$CPU", memory: 3Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "$((CPU * 2))", memory: 6Gi, ephemeral-storage: 8Gi}
           volumeMounts:
             - {name: work, mountPath: /w}
       volumes:
@@ -159,11 +160,15 @@ YAML
 }
 
 start() {
-  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] -- ARGS..."
+  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] -- ARGS..."
   local name=$1 variant=$2 runs=$3 parallel=$4 hours=4
   shift 4
-  while [[ ${1:-} == --hours || ${1:-} == --engine ]]; do
-    if [[ $1 == --hours ]]; then hours=$2; else ENGINE=$2; fi
+  while [[ ${1:-} == --hours || ${1:-} == --engine || ${1:-} == --cpu ]]; do
+    case "$1" in
+      --hours) hours=$2 ;;
+      --engine) ENGINE=$2 ;;
+      *) CPU=$2 ;;
+    esac
     shift 2
   done
   [[ ${1:-} == -- ]] || die "missing -- before the krx_stress arguments"
