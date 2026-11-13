@@ -93,6 +93,28 @@ TEST_CASE("SessionStateTests")
     CHECK(5 == log.eventsBackup);
   }
 
+  // KRX fork (U-4): the reset flags and the resend range keep what was set (each setter stores).
+  SECTION("resetFlagsAndResendRange_Set_ReadBack")
+  {
+    SessionState state( UtcTimeStamp::now() );
+
+    state.receivedReset( true );
+    state.sentReset( true );
+    state.resendRange( 5, 9 );
+    CHECK( state.receivedReset() );
+    CHECK( state.sentReset() );
+    CHECK( state.resendRequested() );
+    CHECK( 5 == state.resendRange().first );
+    CHECK( 9 == state.resendRange().second );
+
+    state.receivedReset( false );
+    state.sentReset( false );
+    state.resendRange( 0, 0 );
+    CHECK( !state.receivedReset() );
+    CHECK( !state.sentReset() );
+    CHECK( !state.resendRequested() );
+  }
+
   SECTION("backupSessionLog_StateLogIsNull_LogBackedUp")
   {
     SessionSettings settings;

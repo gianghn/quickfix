@@ -142,6 +142,21 @@ int FreePort() {
   return port;
 }
 
+// `count` different ports no one listens on now: all probes are open while the ports are picked,
+// so the system cannot hand out one twice (FreePort() twice could: a duplicate session, CI #61).
+std::vector<int> FreePorts(std::size_t count) {
+  std::vector<FIX::socket_handle> probes;
+  std::vector<int> ports;
+  for (std::size_t i = 0; i < count; ++i) {
+    probes.push_back(FIX::socket_createAcceptor(0, true));
+    ports.push_back(static_cast<std::uint16_t>(FIX::socket_hostport(probes.back())));
+  }
+  for (const FIX::socket_handle probe : probes) {
+    FIX::socket_close(probe);
+  }
+  return ports;
+}
+
 // Whether a new listening socket can take `port` now (no reuse: an open listener holds it).
 bool CanListenOn(int port) {
   const FIX::socket_handle socket = FIX::socket_createAcceptor(port, false);
@@ -518,7 +533,7 @@ SCENARIO("onLogout runs after the session lock is released", "[krx][v1][p1-2]") 
 SCENARIO("Repeated forced and graceful acceptor stops leave no port or descriptor behind",
          "[krx][v1][tsan][p1-7]") {
   GIVEN("a threaded acceptor listening on four ports") {
-    const std::vector<int> ports{FreePort(), FreePort(), FreePort(), FreePort()};
+    const std::vector<int> ports = FreePorts(4);
     const FIX::SessionSettings settings = AcceptorOn(ports);
     FIX::NullApplication application;
     FIX::MemoryStoreFactory store;
@@ -548,7 +563,7 @@ SCENARIO("Repeated forced and graceful acceptor stops leave no port or descripto
 SCENARIO("A connection that fails to attach to its session leaves the session free",
          "[krx][v1][security][p2-3]") {
   GIVEN("an acceptor with one counterparty's session on one port and another's on a second port") {
-    const std::vector<int> ports{FreePort(), FreePort()};
+    const std::vector<int> ports = FreePorts(2);
     const StartedAcceptor gateway(ports);
     WHEN("the first counterparty logs on twice in one write on the second port, then on its own") {
       const std::string logon = LogonFor(ports[0]);
