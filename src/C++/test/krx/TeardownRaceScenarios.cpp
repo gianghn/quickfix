@@ -7,11 +7,19 @@
 // Rows 6.1 and 6.2 (P0-11): a connection that closes itself and is deleted while gateway threads
 // send went around Session::disconnect(): the session kept its logon state, never called onLogout,
 // and cleared its responder without the lock a sender holds while it writes through it.
+// Row 6.4 (P1-2): onLogout runs without the session lock. Row 6.5 (P1-7, quickfix/quickfix#740):
+// stop() joins the thread running onStart before onStop. Row 6.6 (P2-3): a connection never takes
+// a session of another port, and a stop's wait for logouts sleeps between checks.
+#include <poll.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <future>
 #include <sstream>
@@ -160,6 +168,97 @@ FIX::SessionSettings AcceptorOn(const std::vector<int>& ports) {
   FIX::SessionSettings settings;
   stream >> settings;
   return settings;
+}
+
+// The gateway's threaded acceptor with one session on each of `ports` (KRXGW and KRXSTOP<port>),
+// started; its events (every session's too) are kept.
+class StartedAcceptor {
+ public:
+  explicit StartedAcceptor(const std::vector<int>& ports)
+      : settings_(AcceptorOn(ports)), acceptor_(application_, store_, settings_, logs_) {
+    acceptor_.start();
+  }
+
+  ~StartedAcceptor() { Stop(); }
+
+  StartedAcceptor(const StartedAcceptor&) = delete;
+  StartedAcceptor& operator=(const StartedAcceptor&) = delete;
+  StartedAcceptor(StartedAcceptor&&) = delete;
+  StartedAcceptor& operator=(StartedAcceptor&&) = delete;
+
+  // The gateway stops it without waiting for counterparties to log out.
+  void Stop() { acceptor_.stop(true); }
+
+  [[nodiscard]] const krx::EventLog& Events() const { return logs_.Events(); }
+
+ private:
+  FIX::NullApplication application_;
+  FIX::MemoryStoreFactory store_;
+  krx::EventLogFactory logs_;
+  FIX::SessionSettings settings_;
+  FIX::ThreadedSocketAcceptor acceptor_;
+};
+
+// A Logon (MsgSeqNum 1, HeartBtInt 30) from KRXSTOP<port> to the gateway.
+std::string LogonFor(int port) {
+  FIX::Message logon;
+  FIX::Header& header = logon.getHeader();
+  header.setField(FIX::BeginString("FIX.4.4"));
+  header.setField(FIX::MsgType("A"));
+  header.setField(FIX::SenderCompID("KRXSTOP" + std::to_string(port)));
+  header.setField(FIX::TargetCompID("KRXGW"));
+  header.setField(FIX::MsgSeqNum(1));
+  header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+  logon.setField(FIX::EncryptMethod(0));
+  logon.setField(FIX::HeartBtInt(30));
+  return logon.toString();
+}
+
+// A counterparty's connection to the gateway's `port`, which sends `bytes` at once.
+class Counterparty {
+ public:
+  Counterparty(int port, const std::string& bytes) : socket_(FIX::socket_createConnector()) {
+    FIX::socket_connect(socket_, "127.0.0.1", port);
+    FIX::socket_send(socket_, bytes.data(), bytes.size());
+  }
+
+  ~Counterparty() { FIX::socket_close(socket_); }
+
+  Counterparty(const Counterparty&) = delete;
+  Counterparty& operator=(const Counterparty&) = delete;
+  Counterparty(Counterparty&&) = delete;
+  Counterparty& operator=(Counterparty&&) = delete;
+
+  // Everything the gateway sends until it closes the connection or `timeout` passes.
+  [[nodiscard]] std::string Received(std::chrono::milliseconds timeout) const {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::string received;
+    while (std::chrono::steady_clock::now() < deadline) {
+      pollfd ready{.fd = socket_, .events = POLLIN, .revents = 0};
+      if (poll(&ready, 1, 50) <= 0) {
+        continue;
+      }
+      std::array<char, 4096> buffer{};
+      const ssize_t got = FIX::socket_recv(socket_, buffer.data(), buffer.size());
+      if (got <= 0) {
+        break;
+      }
+      received.append(buffer.data(), static_cast<std::size_t>(got));
+    }
+    return received;
+  }
+
+ private:
+  FIX::socket_handle socket_;
+};
+
+// Process CPU time (user and system) used so far.
+std::chrono::microseconds CpuTime() {
+  rusage usage{};
+  getrusage(RUSAGE_SELF, &usage);
+  const auto seconds = usage.ru_utime.tv_sec + usage.ru_stime.tv_sec;
+  const auto micros = usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+  return std::chrono::seconds(seconds) + std::chrono::microseconds(micros);
 }
 
 // Reads every racy field kIncrements times, as the reading thread does without the session lock.
@@ -340,6 +439,46 @@ SCENARIO("Repeated forced and graceful acceptor stops leave no port or descripto
         INFO(failed_starts << " failed starts; descriptors " << open_before << " -> "
                            << open_after);
         REQUIRE((failed_starts == 0 && ports_free && open_after == open_before));
+      }
+    }
+  }
+}
+
+SCENARIO("A connection that fails to attach to its session leaves the session free",
+         "[krx][v1][security][p2-3]") {
+  GIVEN("an acceptor with one counterparty's session on one port and another's on a second port") {
+    const std::vector<int> ports{FreePort(), FreePort()};
+    const StartedAcceptor gateway(ports);
+    WHEN("the first counterparty logs on twice in one write on the second port, then on its own") {
+      const std::string logon = LogonFor(ports[0]);
+      const std::string wrong_port = Counterparty(ports[1], logon + logon).Received(kWait);
+      const std::string own_port = Counterparty(ports[0], logon).Received(std::chrono::seconds(1));
+      THEN("the wrong port never reaches the session, which then logs on on its own port") {
+        INFO("events:\n" << gateway.Events().Dump());
+        REQUIRE((wrong_port.empty() && own_port.contains("\00135=A\001")));
+      }
+    }
+  }
+}
+
+SCENARIO("A forced stop waiting for a counterparty to log out does not spin a CPU",
+         "[krx][v1][p2-3]") {
+  GIVEN("an acceptor with a logged-on counterparty that never answers a Logout") {
+    const std::vector<int> ports{FreePort()};
+    StartedAcceptor gateway(ports);
+    const Counterparty exchange(ports[0], LogonFor(ports[0]));
+    REQUIRE(gateway.Events().WaitFor("Responding to logon request", kWait));
+    WHEN("the gateway stops the acceptor without waiting") {
+      const auto cpu_before = CpuTime();
+      const auto started = std::chrono::steady_clock::now();
+      gateway.Stop();
+      const auto took = std::chrono::steady_clock::now() - started;
+      const auto cpu = CpuTime() - cpu_before;
+      THEN("the stop's wait for the logout uses little CPU time") {
+        INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+             << " ms, " << std::chrono::duration_cast<std::chrono::milliseconds>(cpu).count()
+             << " ms CPU");
+        REQUIRE((cpu < std::chrono::milliseconds(500)));
       }
     }
   }

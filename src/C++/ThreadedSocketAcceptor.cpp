@@ -178,6 +178,7 @@ void ThreadedSocketAcceptor::onStop()
     {
       if( ::time(&now) -5 >= start )
         break;
+      process_sleep( 0.01 ); // KRX fork (P2-3): it spun a CPU for up to 5 s
     }
 
     // Under the lock, every socket in m_threads is still open (releaseConnection takes it out

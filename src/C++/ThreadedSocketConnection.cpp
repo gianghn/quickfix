@@ -328,6 +328,11 @@ bool ThreadedSocketConnection::setSession( const std::string& msg )
   SessionID sessionID = m_pSession->getSessionID();
   m_pSession = 0;
 
+  // KRX fork (P2-3): a session of another port is never taken. It used to be registered, then
+  // refused while this connection kept it: the rest of its read buffer reached that session.
+  if ( m_sessions.find( sessionID ) == m_sessions.end() )
+    return false;
+
   // see if the session frees up within 5 seconds
   for( int i = 1; i <= 5; i++ )
   {
@@ -337,9 +342,7 @@ bool ThreadedSocketConnection::setSession( const std::string& msg )
     process_sleep( 1 );
   }
 
-  if ( !m_pSession ) 
-    return false;
-  if ( m_sessions.find(m_pSession->getSessionID()) == m_sessions.end() )
+  if ( !m_pSession )
     return false;
 
   m_pSession->setResponder( this );
