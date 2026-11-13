@@ -27,6 +27,16 @@ if(COMMAND house_target)
   house_target(krx_bench)
 endif()
 
+# The chaos stress run (plan items 8.1-8.5): a tool, not a test; test/krx/k8s runs it at length.
+add_executable(krx_stress Stress.cpp)
+target_include_directories(krx_stress SYSTEM PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src/C++)
+target_link_libraries(krx_stress PRIVATE ${PROJECT_NAME})
+target_compile_features(krx_stress PRIVATE cxx_std_23)
+target_compile_definitions(krx_stress PRIVATE KRX_SPEC_DIR="${PROJECT_SOURCE_DIR}/spec")
+if(COMMAND house_target)
+  house_target(krx_stress)
+endif()
+
 # The fuzz target (plan items 1.7, 8.6): clang with libFuzzer, cmake -DKRX_FUZZ=ON.
 option(KRX_FUZZ "Build the libFuzzer target krx_fuzz (clang)" OFF)
 if(KRX_FUZZ)

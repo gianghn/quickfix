@@ -1,0 +1,27 @@
+# Plan items 8.3-8.6 (owner decision Q12): the long runs' own namespace on the lab cluster.
+# Privileged pods are allowed here only for the TSan runs' init container, which sets
+# vm.mmap_rnd_bits=28 on its node (TSan cannot map its shadow memory at Ubuntu's default); the
+# warn and audit labels flag every such pod. The quota keeps the runs to two of the three nodes'
+# CPUs (requests); a pod may burst to twice its request when a node is idle (limits).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: krx-soak
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: krx-soak
+  namespace: krx-soak
+spec:
+  hard:
+    pods: "40"
+    requests.cpu: "32"
+    limits.cpu: "64"
+    requests.memory: 64Gi
+    limits.memory: 96Gi
+    requests.ephemeral-storage: 200Gi

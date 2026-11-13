@@ -17,6 +17,7 @@
 // when the primary drops every packet.
 #include <pthread.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -619,6 +620,26 @@ SCENARIO("A disconnect during a large resend stops the resend", "[krx][v1][secur
       const std::size_t resent = pair.Events().Count("Resending Message");
       THEN("the session stops resending instead of running through the rest") {
         INFO(resent << " messages resent");
+        REQUIRE((resent < static_cast<std::size_t>(kResent)));
+      }
+    }
+  }
+}
+
+// Row U-8 (8.7): the engine's onStop shuts each socket down and waits for its thread; a resend
+// that went on after its sends failed kept stop() waiting (minutes under load, krx_stress seed 4).
+SCENARIO("A large resend stops when its socket is shut down", "[krx][v1][security][u-8]") {
+  GIVEN("a logged-on session resending 2000 messages to a counterparty that reads nothing") {
+    krx::SessionPair pair("KRXRSU8", WithManyStoredMessages("KRXRSU8"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WaitForEvent("Resending Message", kWait));
+    WHEN("the engine shuts the socket down, as stop() does") {
+      ::shutdown(pair.SessionSocket(), SHUT_RDWR);
+      pair.WaitReaderStopped();
+      const std::size_t resent = pair.Events().Count("Resending Message");
+      THEN("the session stops resending instead of running through the rest") {
+        INFO(resent << " messages resent; events:\n" << pair.Events().Dump());
         REQUIRE((resent < static_cast<std::size_t>(kResent)));
       }
     }
