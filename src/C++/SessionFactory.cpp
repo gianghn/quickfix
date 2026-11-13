@@ -62,7 +62,11 @@ Session* SessionFactory::create( const SessionID& sessionID,
     defaultApplVerID = Message::toApplVerID( settings.getString(DEFAULT_APPLVERID) );
   }
 
-  DataDictionaryProvider dataDictionaryProvider;
+  // KRX fork (P0-8 support, quickfix/quickfix#755): with UseDataDictionary=N the validation
+  // settings were ignored; they now configure the default dictionary too.
+  DataDictionary defaultDataDictionary;
+  applyValidationSettings( settings, defaultDataDictionary );
+  DataDictionaryProvider dataDictionaryProvider( defaultDataDictionary );
   if( useDataDictionary )
   {
     if( sessionID.isFIXT() )
@@ -244,17 +248,20 @@ std::shared_ptr<DataDictionary> SessionFactory::createDataDictionary(const Sessi
   }
 
   std::shared_ptr<DataDictionary> pCopyOfDD = std::shared_ptr<DataDictionary>(new DataDictionary(*pDD));
-
-  if( settings.has( VALIDATE_FIELDS_OUT_OF_ORDER ) )
-    pCopyOfDD->checkFieldsOutOfOrder( settings.getBool( VALIDATE_FIELDS_OUT_OF_ORDER ) );
-  if( settings.has( VALIDATE_FIELDS_HAVE_VALUES ) )
-    pCopyOfDD->checkFieldsHaveValues( settings.getBool( VALIDATE_FIELDS_HAVE_VALUES ) );
-  if( settings.has( VALIDATE_USER_DEFINED_FIELDS ) )
-    pCopyOfDD->checkUserDefinedFields( settings.getBool( VALIDATE_USER_DEFINED_FIELDS ) );
-  if( settings.has( ALLOW_UNKNOWN_MSG_FIELDS ) )
-    pCopyOfDD->allowUnknownMsgFields( settings.getBool( ALLOW_UNKNOWN_MSG_FIELDS ) );
-
+  applyValidationSettings( settings, *pCopyOfDD );
   return pCopyOfDD;
+}
+
+void SessionFactory::applyValidationSettings( const Dictionary& settings, DataDictionary& dataDictionary )
+{
+  if( settings.has( VALIDATE_FIELDS_OUT_OF_ORDER ) )
+    dataDictionary.checkFieldsOutOfOrder( settings.getBool( VALIDATE_FIELDS_OUT_OF_ORDER ) );
+  if( settings.has( VALIDATE_FIELDS_HAVE_VALUES ) )
+    dataDictionary.checkFieldsHaveValues( settings.getBool( VALIDATE_FIELDS_HAVE_VALUES ) );
+  if( settings.has( VALIDATE_USER_DEFINED_FIELDS ) )
+    dataDictionary.checkUserDefinedFields( settings.getBool( VALIDATE_USER_DEFINED_FIELDS ) );
+  if( settings.has( ALLOW_UNKNOWN_MSG_FIELDS ) )
+    dataDictionary.allowUnknownMsgFields( settings.getBool( ALLOW_UNKNOWN_MSG_FIELDS ) );
 }
 
 void SessionFactory::processFixtDataDictionaries(const SessionID& sessionID, 
