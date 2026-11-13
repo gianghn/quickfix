@@ -174,8 +174,12 @@ YAML
           resources:
             requests: {cpu: "$CPU", memory: 3Gi, ephemeral-storage: 4Gi}
             limits: {cpu: "$((CPU * 2))", memory: 6Gi, ephemeral-storage: 8Gi}
+          # gdb takes the stacks of a hang and LeakSanitizer stops the threads it checks, both with
+          # ptrace: Yama wants the capability, the runtime's AppArmor and seccomp profiles deny it.
           securityContext:
-            capabilities: {add: [SYS_PTRACE]}  # gdb takes the stacks of a hang (Yama)
+            capabilities: {add: [SYS_PTRACE]}
+            appArmorProfile: {type: Unconfined}
+            seccompProfile: {type: Unconfined}
           volumeMounts:
             - {name: work, mountPath: /w}
       volumes:
