@@ -42,7 +42,7 @@ pod_script() {
   cat <<'SCRIPT'
 set -euo pipefail
 seed=$((JOB_COMPLETION_INDEX + 1))
-packages="g++ cmake make git ca-certificates"
+packages="g++ cmake make git ca-certificates gdb"
 if [ "$VARIANT" = fuzz ]; then packages="$packages clang-18 libclang-rt-18-dev"; fi
 apt-get update -qq >/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $packages >/dev/null
@@ -86,8 +86,21 @@ cmake -S /w/src -B /w/build -DCMAKE_BUILD_TYPE="$build_type" -DQUICKFIX_EXAMPLES
 cmake --build /w/build --target krx_stress --parallel "$(nproc)" >>/w/build.log 2>&1 \
   || { tail -50 /w/build.log; exit 2; }
 rc=0
-/w/build/src/C++/test/krx/krx_stress "${args[@]}" || rc=$?
-# A failed run with --file-log: each session's last events, since the pod's disk goes with it.
+/w/build/src/C++/test/krx/krx_stress "${args[@]}" >/w/out.log 2>&1 &
+pid=$!
+tail -n +1 -f --pid="$pid" /w/out.log &
+# A hang or a stalled settle (with --hang-grace): every thread's stack, once.
+dumped=""
+while kill -0 "$pid" 2>/dev/null; do
+  if [ -z "$dumped" ] && grep -qE '\*\*\* (HANG|STALLED)' /w/out.log; then
+    gdb -p "$pid" -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#' || true
+    dumped=yes
+  fi
+  sleep 2
+done
+wait "$pid" || rc=$?
+sleep 1
+# A failed run with --event-log or --file-log: each session's last events (the pod's disk goes).
 if [ "$rc" != 0 ] && [ -d "${args[5]:-/nonexistent}" ]; then
   find "${args[5]}" -name '*.event.current.log' | sort | while read -r log; do
     echo "== $log"
@@ -161,6 +174,8 @@ YAML
           resources:
             requests: {cpu: "$CPU", memory: 3Gi, ephemeral-storage: 4Gi}
             limits: {cpu: "$((CPU * 2))", memory: 6Gi, ephemeral-storage: 8Gi}
+          securityContext:
+            capabilities: {add: [SYS_PTRACE]}  # gdb takes the stacks of a hang (Yama)
           volumeMounts:
             - {name: work, mountPath: /w}
       volumes:

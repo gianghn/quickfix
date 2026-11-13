@@ -1066,6 +1066,12 @@ int Run(const Options& options) {
   chaos.Print();
 
   const bool settled = Settle(rig, orders, echoes);
+  if (!settled && options.hang_grace_seconds > 0) {
+    // Time to take the stacks of the stalled sessions' threads (test/krx/k8s/run.sh does).
+    std::cout << std::format("*** STALLED: not in step (pid {}) ***\n", ::getpid());
+    std::cout.flush();
+    std::this_thread::sleep_for(seconds(options.hang_grace_seconds));
+  }
   const std::int64_t bad = Verify(orders, "orders ini->acc") + Verify(echoes, "echoes acc->ini");
   watchdog.Guard("final initiator stop", options.stop_limit_seconds,
                  [&] { rig.initiator->stop(); });
