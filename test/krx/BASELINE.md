@@ -68,6 +68,41 @@ are noisy (msg/s ranged 45 k–67 k for the same build); best of 5 shows the cha
 
 To measure again on a quiet machine before the PR merges (D9: no p50/p99.9 regression over 10 %).
 
+## Linux, lab cluster, 13 Nov 2026 (plan items 15.1, 15.3, 15.4; U-16, U-17)
+
+One pod (namespace `krx-bench`, `ubuntu:24.04`, g++ 13.3, kernel 7.0, request 150m / limit 6 CPU:
+the nodes were at 98 % of their CPU requests with Phase 8's chaos jobs, so the pod ran on spare
+CPU) on `rke2-node3`; the store on the pod's `emptyDir`: ext4 on the node's LVM, a consumer NVMe
+(Kingston NV3, no power-loss protection). `fdatasync` there takes about 1 ms, so `FileStoreSync=Y`
+is about 1 k msg/s, not the Mac's 27 k (macOS `fsync` does not flush the drive cache).
+
+15.1, interleaved before (`agent/v1-p8e`) and after: file 5 runs of 100,000 orders and 5,000 round
+trips; sync 3 runs of 3,000 orders and 300 round trips. Medians.
+
+| Store | msg/s before → after | RTT p50 µs | p99 µs | p99.9 µs |
+|---|---|---|---|---|
+| file, sync off | 107,449 → 194,177 | 37.5 → 21.1 | 275.5 → 446.7 | 668.2 → 1,133.9 |
+| file, `FileStoreSync=Y` | 1,080 → 1,255 | 1,428 → 1,456 | 8,986 → 8,115 | 13,142 → 9,141 |
+
+The file store's p99/p99.9 rose on a node shared with chaos jobs; to measure again on a quiet node
+before 15.1 merges (D9).
+
+Group commit spikes (`spike/v1-p15-group-commit`, not for merge), `FileStoreSync=Y`, 5,000 orders
+and 300 round trips, 3 interleaved runs, medians; "sync" is today's one sync per message (with 15.1).
+Messages per sync is over the whole run (warm-up and round trips sync one by one); in the
+throughput phase 1a put about 125 messages in a sync, 1b about 14 at 16 senders.
+
+| Senders | sync msg/s | 1a msg/s | 1b msg/s | RTT p50 µs sync / 1a / 1b |
+|---|---|---|---|---|
+| 1 | 1,323 | 172,985 | 1,216 | 1,565 / 1,993 / 1,757 |
+| 4 | 1,033 | 93,211 | 2,773 | 1,719 / 1,679 / 1,568 |
+| 8 | 1,176 | 113,939 | 5,182 | 1,397 / 1,506 / 1,588 |
+| 16 | 1,381 | 110,371 | 10,810 | 1,379 / 1,432 / 1,594 |
+
+The Mac with a sync delay added (`KRX_SYNC_DELAY_US`, a stand-in for a slower disk) agrees: at
+1 ms, sync 704 msg/s, 1a 95,331, 1b 697 / 1,545 / 2,862 at 1 / 4 / 8 senders; at 200 µs, sync
+3,164, 1a 88,273, 1b 3,159 / 6,855 / 13,285.
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

@@ -196,7 +196,7 @@ evidence is U-16). Rows 15.7–15.11 are written for whichever of 15.3 and 15.4 
 | [ ] U-13 | checksec passes on the release build; no p99 regression from hardening flags | 12.2 |
 | [ ] U-14 | Build reproducible from signed tag `krx-1.0.0`; SBOM with both SHAs; no open high or critical CVE | 12.3, 12.4 |
 | [ ] U-16 | Fewer store system calls measured: `krx_bench` file and sync before and after (medians of 3 interleaved runs), no p50/p99.9 regression over 10 %: `test/krx/BASELINE.md` | 15.1 |
-| [ ] U-17 | The 15.3 and 15.4 spikes measured (throughput, p50/p99.9, syncs per message; 15.4 at 1, 2, 4, 8 senders) with their risks, in the plan for Q18 | 15.3, 15.4 |
+| [x] U-17 | The 15.3 and 15.4 spikes measured (throughput, p50/p99.9, syncs per message; 15.4 at 1, 2, 4, 8 senders) with their risks, in the plan for Q18 | 15.3, 15.4 |
 
 ## Security
 

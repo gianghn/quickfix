@@ -78,7 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
-| Q18 | With `FileStoreSync=Y` one sender reaches about 25 k msg/s: one sync per message, in turn, under the session lock (Phase 15). How do messages share a sync? | 15.3 decoupled: `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared: senders on one session wait for one sync together, `send()` keeps its meaning · neither: one sync per message | decide after the 15.3 and 15.4 spikes are measured | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
+| Q18 | With `FileStoreSync=Y` one sender reaches about 25 k msg/s: one sync per message, in turn, under the session lock (Phase 15). How do messages share a sync? | 15.3 decoupled: `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared: senders on one session wait for one sync together, `send()` keeps its meaning · neither: one sync per message | 1a, with a bounded queue and a per-seqnum "not sent" event for the gateway, if 11.7's production disk syncs in more than about 100 µs (spikes, Phase 15: Linux sync mode about 1 k msg/s, 1a about 100 k, 1b 0.7 × senders) | Phase 15 | open (owner, 13 Nov 2026: do 15.1 first, spike 15.3 and 15.4, then decide) |
 
 ## Ground rules
 
@@ -110,7 +110,7 @@ The owner may change any of these before its phase starts.
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.5 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 first, then the 15.3 and 15.4 spikes; 15.2 and the build of 15.3/15.4 wait for Q18 |
+| 15 | Store throughput | 15.0–15.5 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 built (p99.9 to measure again on a quiet node); 15.3 and 15.4 spiked and measured (Handover 15); 15.2 and the build wait for Q18 |
 
 ### Next steps (13 Nov 2026)
 
@@ -327,6 +327,39 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
 - 15.5 Decide with the owner (Q18) from the 15.3 and 15.4 numbers and risks, then build the choice
   red first (rows 15.7–15.11), with 15.2 if it still pays.
 
+**Spike results (13 Nov 2026, U-17; numbers in `test/krx/BASELINE.md`).** Measured on Linux in the
+lab cluster (a pod in namespace `krx-bench`, store on a node's consumer NVMe) and on the Mac with
+a simulated slow sync. The spike (`spike/v1-p15-group-commit`, local, not for merge) is one
+flusher thread per session that syncs the body once for everything written since its last sync,
+then writes those messages to the socket in order; 1a returns from `send()` once queued, 1b waits
+outside the session lock until its message went out.
+
+- The disk decides everything. Linux `fdatasync` on that NVMe is about 1 ms: today's sync mode does
+  **about 1,000–1,400 msg/s**, not 27 k (the Mac's `fsync` does not flush the drive cache). A
+  production volume with power-loss protection may sync in tens of µs; 11.7 must measure it.
+- **1a (decoupled)**: 93 k–173 k msg/s at 1–16 senders on Linux, about 100× today; about 125
+  messages per sync under load. RTT p50 unchanged (one sync per round trip each side, about
+  1.5 ms). Risks:
+  - `send()` returning `true` means stored and queued, not on disk nor on the wire (changes row 4.5
+    and the meaning Q2 chose). A sync or socket failure after the return leaves the message stored
+    and unsent; it goes out later only as a PossDup resend, which the gateway refuses (Q2), so the
+    gateway needs a per-seqnum "not sent" event to tell the OMS (Phase 10 work).
+  - The queue between `send()` and the flusher has no bound: a disk stall grows memory and delays
+    every order behind it; it needs a cap and back-pressure (as `MaxQueuedMessages`, Q16).
+  - A thread per session: start, stop, `disconnect()`, the responder's lifetime and P0-3's send
+    timeout all meet a second thread (the Phase 6 race class; the spike's destructor can still
+    call a freed responder). TSan and the teardown rows must cover it.
+  - The message log (`onOutgoing`) records a message before it is on the wire.
+  - Durability holds: only synced messages reach the socket, so after power loss the exchange has
+    seen nothing the store lost.
+- **1b (shared)**: `send()` keeps its meaning (on disk and written). Gains only with concurrent
+  senders on one session: 1.2 k / 2.8 k / 5.2 k / 10.8 k msg/s at 1 / 4 / 8 / 16 senders, about
+  0.7 × senders × today; a single sender gains nothing (slightly slower: a thread hand-off). Risks:
+  the same second thread and teardown work as 1a; the gateway must send from many threads per
+  session to see any gain (to check with the gateway's design).
+- Not measured: a batch send API (`sendToTarget` of several messages, one sync) would give a
+  single gateway thread 1a's batching with 1b's meaning; it changes the quickfix-rs binding.
+
 ### For the owner
 
 - Q1–Q8 are answered (12 Nov 2026, in the table above).
@@ -494,3 +527,24 @@ the counterparty gap-filling messages it sent is worth an alert) and leaves out 
 here; the four validation setting names became `constexpr const char*` (house lint).
 **Away from the spec:** none.
 **Left for the owner:** merge #51–#55 in order (each retargeted and green first). Next: Phase 8.
+
+### Handover 15 — 13 Nov 2026
+
+**Built:** the Phase 15 plan (items 15.0–15.5, Q18) and rows 15.1–15.11, U-16, U-17; 15.0 was
+already done in Phase 8 (a7532eaa: `Stress.cpp` passes clang-tidy); 15.1 (one `pwrite` per body,
+header record and seqnums write, end offsets in memory); `krx_bench` `senders=N`; the 15.3 and 15.4
+spikes on `spike/v1-p15-group-commit` (local, not for merge), measured.
+**Red → green:** 0 → 3 (rows 15.1–15.3 are guards, green before and after; the evidence is U-16).
+`krx_ut` 112 cases, `ut` 53 cases pass (Release, Mac); ASan/UBSan and TSan run in CI.
+**Checks:** `lint.sh .` passes (format, ast-grep, suppressions, tidy, build).
+**Measured:** Linux pod (lab cluster): file 107 k → 194 k msg/s, p50 37.5 → 21.1 µs, but p99.9
+668 → 1,134 µs on a node shared with chaos jobs; sync 1,080 → 1,255 msg/s. Mac (loaded, best of
+5): file 66.8 k → 71.8 k, sync 25.7 k → 27.7 k. Spikes: Linux sync mode about 1 k msg/s
+(`fdatasync` about 1 ms on a consumer NVMe), 1a about 100 k, 1b 0.7 × senders × today.
+**Decisions taken:** Phase 15 numbered after 14 (it ends before 11 measures); the bench pod got
+its own namespace `krx-bench` (owner, 13 Nov 2026), quota 6 CPU, request 150m because the nodes'
+requests were full; Windows keeps the stdio write path.
+**Away from the spec:** none.
+**Left for the owner:** Q18 (1a, 1b or neither; the plan's recommendation depends on 11.7's
+production disk); 15.1's file p99.9 to measure again on a quiet node before it merges (D9);
+delete namespace `krx-bench` when done (`kubectl delete ns krx-bench`).
