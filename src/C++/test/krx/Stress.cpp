@@ -496,7 +496,12 @@ class Canaries {
     }
   }
 
+  // At most kMax: a soak's thousands of stops would otherwise grow the descriptor count it watches.
   void Add(const std::filesystem::path& folder) {
+    constexpr std::size_t kMax = 8;
+    if (canaries_.size() >= kMax) {
+      return;
+    }
     const std::string path = (folder / std::format("canary{}", canaries_.size())).string();
     std::FILE* file = std::fopen(path.c_str(), "w+");
     struct stat status{};
