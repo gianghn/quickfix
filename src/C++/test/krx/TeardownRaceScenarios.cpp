@@ -120,12 +120,18 @@ void SetStateRepeatedly(FIX::SessionState& state) {
     state.sentLogout(!on);
     state.enabled(on);
     state.lastSentTime(At(9, 0, 0, i));
+    // U-4 (8.3): what Session::disconnect() from another thread resets.
+    state.receivedReset(on);
+    state.sentReset(!on);
+    state.resendRange(on ? i + 1 : 0, on ? i + 2 : 0);
   }
 }
 
 struct Reads {
-  int whole_times{0};  // timestamps of the writer's day, never torn
-  int logged_on{0};    // reads that saw both logon flags set
+  int whole_times{0};   // timestamps of the writer's day, never torn
+  int logged_on{0};     // reads that saw both logon flags set
+  int whole_ranges{0};  // resend ranges the writer set, never half of one and half of another
+  int reset_flags{0};   // reads that saw a reset flag set
 };
 
 // A port no one listens on now.
@@ -355,6 +361,10 @@ Reads ReadStateRepeatedly(const FIX::SessionState& state) {
   for (int i = 0; i < kIncrements; ++i) {
     reads.logged_on += (state.receivedLogon() && state.sentLogon()) ? 1 : 0;
     reads.whole_times += (state.lastSentTime().m_date == day) ? 1 : 0;
+    const FIX::SessionState::ResendRange range = state.resendRange();
+    const bool whole = (range.first == 0 && range.second == 0) || range.second == range.first + 1;
+    reads.whole_ranges += whole ? 1 : 0;
+    reads.reset_flags += (state.receivedReset() || state.sentReset()) ? 1 : 0;
   }
   return reads;
 }
@@ -382,7 +392,7 @@ SCENARIO("The last sent time gives back exactly what was stored", "[krx][v1][tsa
 }
 
 SCENARIO("Session flags and the last sent time can be read while another thread sets them",
-         "[krx][v1][tsan][p1-1]") {
+         "[krx][v1][tsan][p1-1][u-4]") {
   GIVEN("a session state whose last sent time is on the writer's day") {
     FIX::SessionState state(At(9, 0, 0, 0));
     WHEN("one thread sets the flags and the time while another reads them") {
@@ -390,8 +400,12 @@ SCENARIO("Session flags and the last sent time can be read while another thread 
       const Reads reads = ReadStateRepeatedly(state);
       writer.join();
       THEN("every read is whole and the last values stand (TSan checks the reads in between)") {
-        INFO(reads.whole_times << " whole, " << reads.logged_on << " logged on");
-        REQUIRE((reads.whole_times == kIncrements && !state.receivedLogon() && state.sentLogout() &&
+        INFO(reads.whole_times << " whole times, " << reads.whole_ranges << " whole ranges, "
+                               << reads.logged_on << " logged on, " << reads.reset_flags
+                               << " reset");
+        REQUIRE((reads.whole_times == kIncrements && reads.whole_ranges == kIncrements &&
+                 !state.receivedLogon() && state.sentLogout() && !state.receivedReset() &&
+                 state.sentReset() && !state.resendRequested() &&
                  state.lastSentTime() == At(9, 0, 0, kIncrements - 1)));
       }
     }

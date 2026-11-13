@@ -74,11 +74,12 @@ public:
   bool sentLogon() const { return m_sentLogon.load(); }
   void sentLogon( bool value ) { m_sentLogon.store( value ); }
 
-  bool receivedReset() const { return m_receivedReset; }
-  void receivedReset( bool value ) { m_receivedReset = value; }
+  // KRX fork (U-4, 8.3): Session::disconnect() from another thread resets these too.
+  bool receivedReset() const { return m_receivedReset.load(); }
+  void receivedReset( bool value ) { m_receivedReset.store( value ); }
 
-  bool sentReset() const { return m_sentReset; }
-  void sentReset( bool value ) { m_sentReset = value; }
+  bool sentReset() const { return m_sentReset.load(); }
+  void sentReset( bool value ) { m_sentReset.store( value ); }
 
   bool initiate() const { return m_initiate; }
   void initiate( bool value ) { m_initiate = value; }
@@ -93,13 +94,18 @@ public:
   void testRequest( int value ) { m_testRequest = value; }
 
   bool resendRequested() const
-  { return !(m_resendRange.first == 0 && m_resendRange.second == 0); }
+  {
+    const ResendRange range = resendRange();
+    return range.first != 0 || range.second != 0;
+  }
 
   typedef std::pair<int, int> ResendRange;
 
-  ResendRange resendRange () const { return m_resendRange; }
+  // KRX fork (U-4, 8.3): read by the reading thread while disconnect() from another thread clears
+  // it; under the state's lock, so a reader never gets half of one range and half of another.
+  ResendRange resendRange () const { const Locker l( m_mutex ); return m_resendRange; }
   void resendRange (int begin, int end)
-  { m_resendRange = std::make_pair( begin, end ); }
+  { const Locker l( m_mutex ); m_resendRange = std::make_pair( begin, end ); }
 
   MessageStore* store() { return m_pStore; }
   void store( MessageStore* pValue ) { m_pStore = pValue; }
@@ -228,8 +234,8 @@ private:
   std::atomic<bool> m_receivedLogon;
   std::atomic<bool> m_sentLogout;
   std::atomic<bool> m_sentLogon;
-  bool m_sentReset;
-  bool m_receivedReset;
+  std::atomic<bool> m_sentReset;
+  std::atomic<bool> m_receivedReset;
   bool m_initiate;
   int m_logonTimeout;
   int m_logoutTimeout;
