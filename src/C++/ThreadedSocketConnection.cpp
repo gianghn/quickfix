@@ -128,7 +128,7 @@ bool ThreadedSocketConnection::waitWritable( std::chrono::steady_clock::time_poi
                        && m_drained.size() < MAX_DRAINED;
   // One entry to write, and one to read when this is the reading thread.
   std::array<pollfd, 2> pfds{ { { m_socket, POLLOUT, 0 }, { m_socket, POLLIN, 0 } } };
-  if ( left <= 0 || poll( pfds.data(), reading ? 2 : 1, left ) == 0 ) return false;
+  if ( poll( pfds.data(), reading ? 2 : 1, std::max( left, 0 ) ) == 0 ) return false;
   if ( reading && pfds[1].revents != 0 )
   {
     std::array<char, BUFSIZ> chunk{};

@@ -667,6 +667,15 @@ std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int
   }
   return backlog;
 }
+
+// Whether `count` application messages reached the gateway's fromApp within 5 s.
+bool AppMessagesReach(const krx::SessionPair& pair, int count) {
+  const auto deadline = std::chrono::steady_clock::now() + kWait;
+  while (pair.AppMessages() < count && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return pair.AppMessages() == count;
+}
 }  // namespace
 
 SCENARIO("A resend completes while the counterparty is resending its own backlog",
@@ -680,10 +689,13 @@ SCENARIO("A resend completes while the counterparty is resending its own backlog
       AskForMessagesFrom(pair, 2);
       const bool written = pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), kWait);
       const int resent = written ? ReadResent(pair, kResent) : 0;
-      THEN("every message is resent and no send timed out") {
-        INFO("backlog written: " << written << ", " << resent << " resent; events:\n"
+      const bool delivered = AppMessagesReach(pair, kResent);
+      THEN("every message is resent, the counterparty's all arrive, and no send timed out") {
+        INFO("backlog written: " << written << ", " << resent << " resent, " << pair.AppMessages()
+                                 << " delivered; events:\n"
                                  << pair.Events().Dump());
-        REQUIRE((written && resent == kResent && !pair.Events().Contains("Send timed out")));
+        REQUIRE((written && resent == kResent && delivered &&
+                 !pair.Events().Contains("Send timed out")));
       }
     }
   }

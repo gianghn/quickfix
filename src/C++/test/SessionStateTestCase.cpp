@@ -115,6 +115,23 @@ TEST_CASE("SessionStateTests")
     CHECK( !state.resendRequested() );
   }
 
+  // KRX fork (U-9): at most maxQueued() messages wait above a gap; 0 is no limit.
+  SECTION("queue_Capped_RefusesPastTheCap")
+  {
+    SessionState state( UtcTimeStamp::now() );
+    CHECK( 10000 == state.maxQueued() );
+
+    state.maxQueued( 2 );
+    CHECK( 2 == state.maxQueued() );
+    CHECK( state.queue( 3, Message() ) );
+    CHECK( state.queue( 4, Message() ) );
+    CHECK( state.queue( 4, Message() ) );   // already queued: replaced, not refused
+    CHECK( !state.queue( 5, Message() ) );
+
+    state.maxQueued( 0 );
+    CHECK( state.queue( 5, Message() ) );
+  }
+
   SECTION("backupSessionLog_StateLogIsNull_LogBackedUp")
   {
     SessionSettings settings;

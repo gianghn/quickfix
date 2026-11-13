@@ -2530,6 +2530,53 @@ TEST_CASE_METHOD(acceptorFixture, "AcceptorSessionTestCase")
     CHECK( 2 == fromTestRequest );
     CHECK( 7 == object->getExpectedTargetNum() );
   }
+
+  // KRX fork (U-9, Q16): past MaxQueuedMessages a message above the gap is refused, with an error
+  // event on the first one refused and on every thousandth.
+  SECTION("queueCapRefusesAndLogsTheFirstRefusal")
+  {
+    struct Events : public Log
+    {
+      void clear() override {}
+      void backup() override {}
+      void onIncoming( const std::string& ) override {}
+      void onOutgoing( const std::string& ) override {}
+      void onEvent( const std::string& text ) override
+      { if ( text.find( "Queue full" ) != std::string::npos ) ++queueFull; }
+      int queueFull = 0;
+    };
+    struct EventsFactory : public LogFactory
+    {
+      Log* create() override { return &events; }
+      Log* create( const SessionID& ) override { return &events; }
+      void destroy( Log* ) override {}
+      Events events;
+    } logs;
+
+    destroySession();
+    SessionID sessionID( BeginString( "FIX.4.2" ), SenderCompID( "TW" ), TargetCompID( "ISLD" ) );
+    DataDictionaryProvider provider;
+    provider.addTransportDataDictionary( sessionID.getBeginString(), FIX::TestSettings::pathForSpec("FIX42") );
+    object = std::make_unique<Session>( [this](){ return now; }, *this, factory, sessionID, provider,
+                                        TimeRange( startTime, endTime ), 0, &logs ).release();
+    object->setResponder( this );
+    object->setMaxQueuedMessages( 1 );
+    CHECK( 1 == object->getMaxQueuedMessages() );
+
+    object->next( createLogon( "ISLD", "TW", 1 ), now );
+    object->next( createTestRequest( "ISLD", "TW", 5, "A" ), now );  // queued
+    object->next( createTestRequest( "ISLD", "TW", 6, "B" ), now );  // refused: logged
+    object->next( createTestRequest( "ISLD", "TW", 7, "C" ), now );  // refused: not logged
+    CHECK( 1 == logs.events.queueFull );
+
+    // The gap filled, the queued 5 is processed; 6 and 7 come again with the resend.
+    FIX42::SequenceReset gapFill = createSequenceReset( "ISLD", "TW", 2, 5 );
+    gapFill.set( GapFillFlag( true ) );
+    object->next( gapFill, now );
+    CHECK( 1 == fromTestRequest );
+    CHECK( 6 == object->getExpectedTargetNum() );
+    destroySession();
+  }
 }
 
 TEST_CASE_METHOD(acceptorT11Fixture, "AcceptorT11TestCase")
