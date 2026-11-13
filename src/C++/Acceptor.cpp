@@ -245,10 +245,12 @@ void Acceptor::stop( bool force )
   }
 
   m_stop = true;
-  onStop();
+  // KRX fork (P1-7, quickfix/quickfix#740): onStop only after the thread running onStart has
+  // ended, so it tears down everything onStart set up (each port's accept thread and socket).
   if( m_threadid )
     thread_join( m_threadid );
   m_threadid = 0;
+  onStop();
 
   for( Session* session : enabledSessions )
     session->logon();
