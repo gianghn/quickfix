@@ -190,6 +190,30 @@ void DataDictionary::iterate( const FieldMap& map, const MsgType& msgType ) cons
     }
     lastField = field.getTag();
   }
+
+  if ( !m_beginString.getValue().empty() )
+    checkNestedGroupCounts( map, msgType );
+}
+
+// KRX fork (P0-8 support, after quickfix/quickfix#743): the counts of groups inside group entries,
+// checked with each group's dictionary, at every depth. Only the counts: #743 ran every check of
+// iterate() on the entries, which refuses valid messages here (a group's dictionary does not list
+// its fields as fields of the message).
+void DataDictionary::checkNestedGroupCounts( const FieldMap& map, const MsgType& msgType ) const
+{
+  for ( auto groups = map.g_begin(); groups != map.g_end(); ++groups )
+  {
+    int delim = 0;
+    const DataDictionary* pGroupDD = nullptr;
+    if ( !getGroup( msgType.getValue(), groups->first, delim, pGroupDD ) )
+      continue;
+    for ( const FieldMap* group : groups->second )
+    {
+      for ( auto i = group->begin(); i != group->end(); ++i )
+        pGroupDD->checkGroupCount( *i, *group, msgType );
+      pGroupDD->checkNestedGroupCounts( *group, msgType );
+    }
+  }
 }
 
 void DataDictionary::readFromURL( const std::string& url )

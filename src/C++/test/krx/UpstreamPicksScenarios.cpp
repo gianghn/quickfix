@@ -5,6 +5,8 @@
 // beyond the gap at once (the fork already did).
 // Row 7.2 (P1-6, quickfix/quickfix#764): a field map assigned to itself keeps its fields and
 // groups, and one moved onto a map with groups frees those groups.
+// Row 7.5 (P0-8 support, quickfix/quickfix#743): validation checks the count of a repeating
+// group nested in another (Parties' PartySubIDs), not only of top-level groups.
 #include <chrono>
 #include <memory>
 #include <string>
@@ -12,11 +14,15 @@
 
 #include <catch_amalgamated.hpp>
 
+#include "DataDictionary.h"
+#include "Exceptions.h"
 #include "FieldMap.h"
 #include "FieldTypes.h"
 #include "FixFields.h"
+#include "FixValues.h"
 #include "Message.h"
 #include "SessionPair.h"
+#include "fix44/NewOrderSingle.h"
 
 namespace {
 
@@ -69,7 +75,53 @@ FIX::FieldMap WithFieldAndGroup() {
   return map;
 }
 
+// The FIX.4.4 dictionary from spec/.
+const FIX::DataDictionary& Fix44() {
+  static const FIX::DataDictionary dictionary(std::string(KRX_SPEC_DIR) + "/FIX44.xml");
+  return dictionary;
+}
+
+// A NewOrderSingle (as the dictionary parses it off the wire) with one party carrying
+// `sub_ids` PartySubID entries, its NoPartySubIDs (802) saying `stated`.
+FIX::Message OrderWithPartySubIDs(int sub_ids, int stated) {
+  FIX44::NewOrderSingle order(FIX::ClOrdID("1"), FIX::Side(FIX::Side_BUY),
+                              FIX::TransactTime(FIX::UtcTimeStamp::now()),
+                              FIX::OrdType(FIX::OrdType_MARKET));
+  FIX::Header& header = order.getHeader();
+  header.setField(FIX::SenderCompID("KRXEX"));
+  header.setField(FIX::TargetCompID("KRXGW"));
+  header.setField(FIX::MsgSeqNum(2));
+  header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+  order.set(FIX::Symbol("VNM"));
+  FIX44::NewOrderSingle::NoPartyIDs party;
+  party.set(FIX::PartyID("TRADER1"));
+  party.set(FIX::PartyIDSource(FIX::PartyIDSource_PROPRIETARY));
+  party.set(FIX::PartyRole(FIX::PartyRole_EXECUTING_TRADER));
+  for (int i = 0; i < sub_ids; ++i) {
+    FIX44::NewOrderSingle::NoPartyIDs::NoPartySubIDs sub_id;
+    sub_id.set(FIX::PartySubID("DESK" + std::to_string(i)));
+    sub_id.set(FIX::PartySubIDType(1));
+    party.addGroup(sub_id);
+  }
+  party.setField(FIX::NoPartySubIDs(stated));
+  order.addGroup(party);
+  return {order.toString(), Fix44()};
+}
+
 }  // namespace
+
+SCENARIO("Nested repeating groups are validated by their counts", "[krx][v1][p0-8]") {
+  GIVEN("the FIX.4.4 dictionary and an order whose party has nested PartySubIDs") {
+    WHEN("the nested count matches its entries, and when it says 2 for one entry") {
+      const FIX::Message correct = OrderWithPartySubIDs(2, 2);
+      const FIX::Message miscounted = OrderWithPartySubIDs(1, 2);
+      THEN("the correct order passes and the miscounted one is refused") {
+        REQUIRE_NOTHROW(Fix44().validate(correct));
+        REQUIRE_THROWS_AS(Fix44().validate(miscounted), FIX::RepeatingGroupCountMismatch);
+      }
+    }
+  }
+}
 
 SCENARIO("A field map moved onto itself keeps its contents", "[krx][v1][p1-6]") {
   GIVEN("a field map with a field and a group") {
