@@ -32,7 +32,9 @@
 #include "Mutex.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 
 namespace FIX
 {
@@ -175,6 +177,16 @@ public:
   }
   void clearQueue()
   { Locker l( m_mutex ); m_queue.clear(); }
+  // KRX fork (P1-5, quickfix/quickfix#715): drops the queued messages below `msgSeqNum` and says
+  // how many there were.
+  std::size_t clearQueueUpTo( int msgSeqNum )
+  {
+    const Locker l( m_mutex );
+    const auto end = m_queue.lower_bound( msgSeqNum );
+    const auto dropped = static_cast<std::size_t>( std::distance( m_queue.begin(), end ) );
+    m_queue.erase( m_queue.begin(), end );
+    return dropped;
+  }
 
   bool set( int s, const std::string& m ) EXCEPT ( IOException )
   { Locker l( m_mutex ); return m_pStore->set( s, m ); }

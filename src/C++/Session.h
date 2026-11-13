@@ -333,6 +333,7 @@ private:
   void nextLogout( const Message&, const UtcTimeStamp& now );
   void nextReject( const Message&, const UtcTimeStamp& now );
   void nextSequenceReset( const Message&, const UtcTimeStamp& now );
+  void dropQueuedBelow( int newSeqNo ); // KRX fork (P1-5)
   void nextResendRequest( const Message&, const UtcTimeStamp& now );
 
   void generateLogon();

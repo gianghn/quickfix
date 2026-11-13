@@ -360,6 +360,15 @@ void Session::nextReject( const Message& reject, const UtcTimeStamp& now )
   nextQueued( now );
 }
 
+void Session::dropQueuedBelow( int newSeqNo )
+{
+  const std::size_t dropped = m_state.clearQueueUpTo( newSeqNo );
+  if ( dropped == 0 ) return;
+  const std::string event = "GapFill to " + IntConvertor::convert( newSeqNo ) + " dropped "
+    + std::to_string( dropped ) + " queued messages";
+  m_state.onEvent( event );
+}
+
 void Session::nextSequenceReset( const Message& sequenceReset, const UtcTimeStamp& now )
 {
   bool isGapFill = false;
@@ -379,7 +388,14 @@ void Session::nextSequenceReset( const Message& sequenceReset, const UtcTimeStam
                      " TO: " + IntConvertor::convert( newSeqNo ) );
 
     if ( newSeqNo > getExpectedTargetNum() )
+    {
       m_state.setNextTargetMsgSeqNum( MsgSeqNum( newSeqNo ) );
+      // KRX fork (P1-5, quickfix/quickfix#715): messages queued inside the gap stayed queued until
+      // the disconnect. They are dropped; that the counterparty gap-filled messages it had sent is
+      // worth an alert. (The fork already processes the queued messages past the gap.)
+      if ( isGapFill )
+        dropQueuedBelow( newSeqNo );
+    }
     else if ( newSeqNo < getExpectedTargetNum() && !m_state.receivedLogon() )
     {
       // KRX fork (P0-2): a reject needs a Logon, and generateReject throws without one.
