@@ -393,6 +393,7 @@ public:
 private:
   /// Iterate through fields while applying checks.
   void iterate( const FieldMap& map, const MsgType& msgType ) const;
+  void checkNestedGroupCounts( const FieldMap& map, const MsgType& msgType ) const; // KRX fork
 
   /// Check if message type is defined in spec.
   void checkMsgType( const MsgType& msgType ) const
