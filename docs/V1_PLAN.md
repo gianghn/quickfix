@@ -93,7 +93,7 @@ The owner may change any of these before its phase starts.
 | 4 | Store survives disk errors and crashes | 4.1–4.5 | P0-4, P0-5, P2-4 | done (#36–#41); the crash runbook (Q1) to write |
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | built, waiting for merge: 6.1 and 6.2 (#46), 6.4 (#47), 6.5 (#48), 6.6 (#49), 6.3's TSan row (#50; 6.3 itself #28, #29) |
-| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | building: 7.1 (#51), 7.2 (#52); 7.3 and 7.4 not needed (Q5, Q6) |
+| 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | building: 7.1 (#51), 7.2 (#52), 7.5 (#53); 7.3 and 7.4 not needed (Q5, Q6) |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |

@@ -117,6 +117,7 @@
 
 #if (HAVE_SSL > 0)
 
+#include <memory>
 #include <vector>
 
 #include "Mutex.h"
@@ -771,6 +772,8 @@ STACK_OF(X509_NAME) * findCAList(const char *cpCAfile, const char *cpCApath)
     {
 #endif
       cp = string_concat(cpCApath, SLASH, direntry->d_name, 0);
+      // KRX fork (P2-1, upstream 7deb8275): string_concat hands over a new[] buffer.
+      const std::unique_ptr<char[]> owned(cp);
       sk = SSL_load_client_CA_file(cp);
       for (n = 0; sk != 0 && n < sk_X509_NAME_num(sk); n++)
       {
