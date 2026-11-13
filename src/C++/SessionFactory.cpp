@@ -196,6 +196,8 @@ Session* SessionFactory::create( const SessionID& sessionID,
     pSession->setLogonTimeout( settings.getInt( LOGON_TIMEOUT ) );
   if ( settings.has( SEND_TIMEOUT ) )
     pSession->setSendTimeoutMs( settings.getInt( SEND_TIMEOUT ) * 1000 );
+  if ( settings.has( MAX_QUEUED_MESSAGES ) )
+    pSession->setMaxQueuedMessages( settings.getInt( MAX_QUEUED_MESSAGES ) );
   if ( settings.has( LOGOUT_TIMEOUT ) )
     pSession->setLogoutTimeout( settings.getInt( LOGOUT_TIMEOUT ) );
   if ( settings.has( RESET_ON_LOGON ) )

@@ -12,6 +12,7 @@
 // sendToTarget returning false may still deliver the message later by a resend (P0-6): "late".
 // Usage: krx_stress [seconds=30] [sessions=4] [threads=4] [port=7700] [seed=1] [workdir]
 //                   [--no-echo] [--file-log] [--settle=<seconds, 120>] [--hang-grace=<seconds, 0>]
+//                   [--stop-limit=<seconds a stop may take, 15; more under a sanitizer>]
 // Exit status: 0 PASS, 1 anomalies, 3 a step hung (the watchdog), 2 bad usage.
 #include <sys/stat.h>
 #include <unistd.h>
@@ -77,6 +78,7 @@ struct Options {
   bool file_log = false;
   int settle_seconds = 120;
   int hang_grace_seconds = 0;
+  int stop_limit_seconds = 15;  // plan item 8.7: every stop under load within 15 s
 };
 
 Options Parse(std::span<char*> args) {
@@ -92,6 +94,8 @@ Options Parse(std::span<char*> args) {
       options.settle_seconds = std::stoi(text.substr(text.find('=') + 1));
     } else if (text.starts_with("--hang-grace=")) {
       options.hang_grace_seconds = std::stoi(text.substr(text.find('=') + 1));
+    } else if (text.starts_with("--stop-limit=")) {
+      options.stop_limit_seconds = std::stoi(text.substr(text.find('=') + 1));
     } else {
       positional.push_back(text);
     }
@@ -664,11 +668,12 @@ class Chaos {
   int Pick(int low, int high) { return std::uniform_int_distribution(low, high)(random_); }
 
  private:
-  static constexpr int kStopLimit = 40;
+  [[nodiscard]] int StopLimit() const { return rig_.options.stop_limit_seconds; }
+
   static constexpr int kStartLimit = 10;
 
   std::string Relog(const FIX::SessionID& id, const std::string& name) {
-    watchdog_.Guard(name, kStopLimit, [&] {
+    watchdog_.Guard(name, StopLimit(), [&] {
       if (FIX::Session* session = FIX::Session::lookupSession(id); session != nullptr) {
         session->logout("chaos");
       }
@@ -681,7 +686,7 @@ class Chaos {
   }
 
   std::string Disconnect(const FIX::SessionID& id, const std::string& name) {
-    watchdog_.Guard(name, kStopLimit, [&] {
+    watchdog_.Guard(name, StopLimit(), [&] {
       if (FIX::Session* session = FIX::Session::lookupSession(id); session != nullptr) {
         session->disconnect();
       }
@@ -694,7 +699,7 @@ class Chaos {
     const bool force = Pick(0, 1) == 1;
     const std::string name = side + (force ? " stop(force)/start" : " stop/start");
     canaries_.Add(rig_.options.workdir);
-    watchdog_.Guard(name + " [stop]", kStopLimit, [&] { engine.stop(force); });
+    watchdog_.Guard(name + " [stop]", StopLimit(), [&] { engine.stop(force); });
     canaries_.Add(rig_.options.workdir);
     canaries_.Check(name);
     std::this_thread::sleep_for(milliseconds(Pick(0, 299)));
@@ -706,7 +711,7 @@ class Chaos {
     const std::string name = "initiator destroy/recreate";
     rig_.pause.store(true);
     const std::unique_lock lock(rig_.initiator_life);
-    watchdog_.Guard(name + " [stop]", kStopLimit, [&] { rig_.initiator->stop(); });
+    watchdog_.Guard(name + " [stop]", StopLimit(), [&] { rig_.initiator->stop(); });
     watchdog_.Guard(name + " [delete]", kStartLimit, [&] { rig_.initiator.reset(); });
     canaries_.Check(name);
     rig_.RecreateInitiator();
@@ -717,8 +722,8 @@ class Chaos {
 
   std::string RestartBoth() {
     const std::string name = "both stop/start";
-    watchdog_.Guard(name + " [ini stop]", kStopLimit, [&] { rig_.initiator->stop(); });
-    watchdog_.Guard(name + " [acc stop]", kStopLimit, [&] { rig_.acceptor->stop(); });
+    watchdog_.Guard(name + " [ini stop]", StopLimit(), [&] { rig_.initiator->stop(); });
+    watchdog_.Guard(name + " [acc stop]", StopLimit(), [&] { rig_.acceptor->stop(); });
     canaries_.Check(name);
     watchdog_.Guard(name + " [acc start]", kStartLimit, [&] { rig_.acceptor->start(); });
     watchdog_.Guard(name + " [ini start]", kStartLimit, [&] { rig_.initiator->start(); });
@@ -894,8 +899,9 @@ int Run(const Options& options) {
 
   const bool settled = Settle(rig, orders, echoes);
   const std::int64_t bad = Verify(orders, "orders ini->acc") + Verify(echoes, "echoes acc->ini");
-  watchdog.Guard("final initiator stop", 40, [&] { rig.initiator->stop(); });
-  watchdog.Guard("final acceptor stop", 40, [&] { rig.acceptor->stop(); });
+  watchdog.Guard("final initiator stop", options.stop_limit_seconds,
+                 [&] { rig.initiator->stop(); });
+  watchdog.Guard("final acceptor stop", options.stop_limit_seconds, [&] { rig.acceptor->stop(); });
   canaries.Check("final");
   rig.initiator.reset();
   rig.acceptor.reset();

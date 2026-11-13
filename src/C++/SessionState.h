@@ -74,11 +74,14 @@ public:
   bool sentLogon() const { return m_sentLogon.load(); }
   void sentLogon( bool value ) { m_sentLogon.store( value ); }
 
-  bool receivedReset() const { return m_receivedReset; }
-  void receivedReset( bool value ) { m_receivedReset = value; }
+  // KRX fork (U-4, 8.3): Session::disconnect() from another thread resets these too. The fork's
+  // setters are defined once, in Session.cpp: an inline copy per source file let Mull mutate a
+  // copy no test reached (MAINTENANCE §5).
+  bool receivedReset() const { return m_receivedReset.load(); }
+  void receivedReset( bool value );
 
-  bool sentReset() const { return m_sentReset; }
-  void sentReset( bool value ) { m_sentReset = value; }
+  bool sentReset() const { return m_sentReset.load(); }
+  void sentReset( bool value );
 
   bool initiate() const { return m_initiate; }
   void initiate( bool value ) { m_initiate = value; }
@@ -93,13 +96,17 @@ public:
   void testRequest( int value ) { m_testRequest = value; }
 
   bool resendRequested() const
-  { return !(m_resendRange.first == 0 && m_resendRange.second == 0); }
+  {
+    const ResendRange range = resendRange();
+    return range.first != 0 || range.second != 0;
+  }
 
   typedef std::pair<int, int> ResendRange;
 
-  ResendRange resendRange () const { return m_resendRange; }
-  void resendRange (int begin, int end)
-  { m_resendRange = std::make_pair( begin, end ); }
+  // KRX fork (U-4, 8.3): read by the reading thread while disconnect() from another thread clears
+  // it; under the state's lock, so a reader never gets half of one range and half of another.
+  ResendRange resendRange () const { const Locker l( m_mutex ); return m_resendRange; }
+  void resendRange (int begin, int end);
 
   MessageStore* store() { return m_pStore; }
   void store( MessageStore* pValue ) { m_pStore = pValue; }
@@ -161,8 +168,12 @@ public:
   void logoutReason( const std::string& value ) 
   { Locker l( m_mutex ); m_logoutReason = value; }
 
-  void queue( int msgSeqNum, const Message& message )
-  { Locker l( m_mutex ); m_queue[ msgSeqNum ] = message; }
+  // KRX fork (U-9, Q16): at most maxQueued() messages wait above a gap (MaxQueuedMessages, 10000
+  // by default, 0 for no limit); false when this one was dropped instead (the open ResendRequest
+  // asks up to the latest, so it comes back).
+  int maxQueued() const { return m_maxQueued.load(); }
+  void maxQueued( int value );
+  bool queue( int msgSeqNum, const Message& message );
   bool retrieve( int msgSeqNum, Message& message )
   {
     Locker l( m_mutex );
@@ -228,8 +239,8 @@ private:
   std::atomic<bool> m_receivedLogon;
   std::atomic<bool> m_sentLogout;
   std::atomic<bool> m_sentLogon;
-  bool m_sentReset;
-  bool m_receivedReset;
+  std::atomic<bool> m_sentReset;
+  std::atomic<bool> m_receivedReset;
   bool m_initiate;
   int m_logonTimeout;
   int m_logoutTimeout;
@@ -237,6 +248,7 @@ private:
   ResendRange m_resendRange;
   HeartBtInt m_heartBtInt;
   std::atomic<int64_t> m_lastSentTime;
+  std::atomic<int> m_maxQueued{ 10000 };
   UtcTimeStamp m_lastReceivedTime;
   std::string m_logoutReason;
   Messages m_queue;

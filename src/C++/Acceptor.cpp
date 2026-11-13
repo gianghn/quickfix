@@ -234,7 +234,6 @@ void Acceptor::stop( bool force )
     {
       enabledSessions.push_back( pSession );
       pSession->logout();
-      Session::unregisterSession( pSession->getSessionID() );
     }
   }
 
@@ -252,8 +251,14 @@ void Acceptor::stop( bool force )
   m_threadid = 0;
   onStop();
 
+  // KRX fork (U-4, P0-10): a session stays registered to its connection until onStop has closed
+  // it. Given up before, during the wait for logouts, a reconnect took the session over while the
+  // old connection still read: two threads drove one session.
   for( Session* session : enabledSessions )
+  {
+    Session::unregisterSession( session->getSessionID() );
     session->logon();
+  }
 }
 
 bool Acceptor::isLoggedOn() const

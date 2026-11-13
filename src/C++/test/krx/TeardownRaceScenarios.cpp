@@ -39,6 +39,7 @@
 #include "SessionSettings.h"
 #include "SessionState.h"
 #include "ThreadedSocketAcceptor.h"
+#include "ThreadedSocketInitiator.h"
 #include "Utility.h"
 
 namespace {
@@ -119,12 +120,18 @@ void SetStateRepeatedly(FIX::SessionState& state) {
     state.sentLogout(!on);
     state.enabled(on);
     state.lastSentTime(At(9, 0, 0, i));
+    // U-4 (8.3): what Session::disconnect() from another thread resets.
+    state.receivedReset(on);
+    state.sentReset(!on);
+    state.resendRange(on ? i + 1 : 0, on ? i + 2 : 0);
   }
 }
 
 struct Reads {
-  int whole_times{0};  // timestamps of the writer's day, never torn
-  int logged_on{0};    // reads that saw both logon flags set
+  int whole_times{0};   // timestamps of the writer's day, never torn
+  int logged_on{0};     // reads that saw both logon flags set
+  int whole_ranges{0};  // resend ranges the writer set, never half of one and half of another
+  int reset_flags{0};   // reads that saw a reset flag set
 };
 
 // A port no one listens on now.
@@ -133,6 +140,21 @@ int FreePort() {
   const int port = static_cast<std::uint16_t>(FIX::socket_hostport(probe));  // a short: 32768+
   FIX::socket_close(probe);
   return port;
+}
+
+// `count` different ports no one listens on now: all probes are open while the ports are picked,
+// so the system cannot hand out one twice (FreePort() twice could: a duplicate session, CI #61).
+std::vector<int> FreePorts(std::size_t count) {
+  std::vector<FIX::socket_handle> probes;
+  std::vector<int> ports;
+  for (std::size_t i = 0; i < count; ++i) {
+    probes.push_back(FIX::socket_createAcceptor(0, true));
+    ports.push_back(static_cast<std::uint16_t>(FIX::socket_hostport(probes.back())));
+  }
+  for (const FIX::socket_handle probe : probes) {
+    FIX::socket_close(probe);
+  }
+  return ports;
 }
 
 // Whether a new listening socket can take `port` now (no reuse: an open listener holds it).
@@ -261,6 +283,92 @@ std::chrono::microseconds CpuTime() {
   return std::chrono::seconds(seconds) + std::chrono::microseconds(micros);
 }
 
+// An exchange on `port` that answers the gateway's Logon and then never answers anything, a
+// Logout included; it reads (and drops) what the gateway sends until the gateway closes.
+class SilentExchange {
+ public:
+  explicit SilentExchange(int port)
+      : listener_(FIX::socket_createAcceptor(port, true)), thread_([this] { Serve(); }) {}
+
+  ~SilentExchange() {
+    stop_.store(true);
+    thread_.join();
+    FIX::socket_close(listener_);
+  }
+
+  SilentExchange(const SilentExchange&) = delete;
+  SilentExchange& operator=(const SilentExchange&) = delete;
+  SilentExchange(SilentExchange&&) = delete;
+  SilentExchange& operator=(SilentExchange&&) = delete;
+
+ private:
+  // True once `socket` has data, false after 50 ms or when the exchange stops.
+  [[nodiscard]] bool Readable(FIX::socket_handle socket) const {
+    pollfd ready{.fd = socket, .events = POLLIN, .revents = 0};
+    return !stop_.load() && poll(&ready, 1, 50) > 0;
+  }
+
+  void Serve() {
+    while (!stop_.load() && !Readable(listener_)) {
+    }
+    if (stop_.load()) {
+      return;
+    }
+    const FIX::socket_handle connection = FIX::socket_accept(listener_);
+    std::string received;
+    bool answered = false;
+    std::array<char, 4096> buffer{};
+    while (!stop_.load()) {
+      if (!Readable(connection)) {
+        continue;
+      }
+      const ssize_t got = FIX::socket_recv(connection, buffer.data(), buffer.size());
+      if (got <= 0) {
+        break;
+      }
+      received.append(buffer.data(), static_cast<std::size_t>(got));
+      if (!answered && received.contains("\00135=A\001")) {
+        const std::string logon = Logon();
+        FIX::socket_send(connection, logon.c_str(), logon.size());
+        answered = true;
+      }
+    }
+    FIX::socket_close(connection);
+  }
+
+  // The exchange's Logon (MsgSeqNum 1, HeartBtInt 30) to the gateway.
+  static std::string Logon() {
+    FIX::Message logon;
+    FIX::Header& header = logon.getHeader();
+    header.setField(FIX::BeginString("FIX.4.4"));
+    header.setField(FIX::MsgType("A"));
+    header.setField(FIX::SenderCompID("KRXEXCH"));
+    header.setField(FIX::TargetCompID("KRXGWI"));
+    header.setField(FIX::MsgSeqNum(1));
+    header.setField(FIX::SendingTime(FIX::UtcTimeStamp::now()));
+    logon.setField(FIX::EncryptMethod(0));
+    logon.setField(FIX::HeartBtInt(30));
+    return logon.toString();
+  }
+
+  FIX::socket_handle listener_;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
+
+// Settings for the gateway's threaded initiator (KRXGWI to KRXEXCH) connecting to `port`.
+FIX::SessionSettings InitiatorTo(int port) {
+  std::istringstream stream(
+      "[DEFAULT]\nConnectionType=initiator\nSocketConnectHost=127.0.0.1\nSocketConnectPort=" +
+      std::to_string(port) +
+      "\nHeartBtInt=30\nReconnectInterval=1\nStartTime=00:00:00\nEndTime=00:00:00\n"
+      "UseDataDictionary=N\n[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGWI\n"
+      "TargetCompID=KRXEXCH\n");
+  FIX::SessionSettings settings;
+  stream >> settings;
+  return settings;
+}
+
 // Reads every racy field kIncrements times, as the reading thread does without the session lock.
 Reads ReadStateRepeatedly(const FIX::SessionState& state) {
   const int day = At(9, 0, 0, 0).m_date;
@@ -268,6 +376,10 @@ Reads ReadStateRepeatedly(const FIX::SessionState& state) {
   for (int i = 0; i < kIncrements; ++i) {
     reads.logged_on += (state.receivedLogon() && state.sentLogon()) ? 1 : 0;
     reads.whole_times += (state.lastSentTime().m_date == day) ? 1 : 0;
+    const FIX::SessionState::ResendRange range = state.resendRange();
+    const bool whole = (range.first == 0 && range.second == 0) || range.second == range.first + 1;
+    reads.whole_ranges += whole ? 1 : 0;
+    reads.reset_flags += (state.receivedReset() || state.sentReset()) ? 1 : 0;
   }
   return reads;
 }
@@ -295,7 +407,7 @@ SCENARIO("The last sent time gives back exactly what was stored", "[krx][v1][tsa
 }
 
 SCENARIO("Session flags and the last sent time can be read while another thread sets them",
-         "[krx][v1][tsan][p1-1]") {
+         "[krx][v1][tsan][p1-1][u-4]") {
   GIVEN("a session state whose last sent time is on the writer's day") {
     FIX::SessionState state(At(9, 0, 0, 0));
     WHEN("one thread sets the flags and the time while another reads them") {
@@ -303,8 +415,12 @@ SCENARIO("Session flags and the last sent time can be read while another thread 
       const Reads reads = ReadStateRepeatedly(state);
       writer.join();
       THEN("every read is whole and the last values stand (TSan checks the reads in between)") {
-        INFO(reads.whole_times << " whole, " << reads.logged_on << " logged on");
-        REQUIRE((reads.whole_times == kIncrements && !state.receivedLogon() && state.sentLogout() &&
+        INFO(reads.whole_times << " whole times, " << reads.whole_ranges << " whole ranges, "
+                               << reads.logged_on << " logged on, " << reads.reset_flags
+                               << " reset");
+        REQUIRE((reads.whole_times == kIncrements && reads.whole_ranges == kIncrements &&
+                 !state.receivedLogon() && state.sentLogout() && !state.receivedReset() &&
+                 state.sentReset() && !state.resendRequested() &&
                  state.lastSentTime() == At(9, 0, 0, kIncrements - 1)));
       }
     }
@@ -417,7 +533,7 @@ SCENARIO("onLogout runs after the session lock is released", "[krx][v1][p1-2]") 
 SCENARIO("Repeated forced and graceful acceptor stops leave no port or descriptor behind",
          "[krx][v1][tsan][p1-7]") {
   GIVEN("a threaded acceptor listening on four ports") {
-    const std::vector<int> ports{FreePort(), FreePort(), FreePort(), FreePort()};
+    const std::vector<int> ports = FreePorts(4);
     const FIX::SessionSettings settings = AcceptorOn(ports);
     FIX::NullApplication application;
     FIX::MemoryStoreFactory store;
@@ -447,7 +563,7 @@ SCENARIO("Repeated forced and graceful acceptor stops leave no port or descripto
 SCENARIO("A connection that fails to attach to its session leaves the session free",
          "[krx][v1][security][p2-3]") {
   GIVEN("an acceptor with one counterparty's session on one port and another's on a second port") {
-    const std::vector<int> ports{FreePort(), FreePort()};
+    const std::vector<int> ports = FreePorts(2);
     const StartedAcceptor gateway(ports);
     WHEN("the first counterparty logs on twice in one write on the second port, then on its own") {
       const std::string logon = LogonFor(ports[0]);
@@ -472,6 +588,145 @@ SCENARIO("A forced stop waiting for a counterparty to log out does not spin a CP
       const auto cpu_before = CpuTime();
       const auto started = std::chrono::steady_clock::now();
       gateway.Stop();
+      const auto took = std::chrono::steady_clock::now() - started;
+      const auto cpu = CpuTime() - cpu_before;
+      THEN("the stop's wait for the logout uses little CPU time") {
+        INFO(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+             << " ms, " << std::chrono::duration_cast<std::chrono::milliseconds>(cpu).count()
+             << " ms CPU");
+        REQUIRE((cpu < std::chrono::milliseconds(500)));
+      }
+    }
+  }
+}
+
+// Row U-4 (8.2, P0-10): stop() gave the session up while its connection still read, so a
+// reconnect took it over and two threads drove one session (TSan, krx_stress chaos).
+namespace {
+// A counterparty logged on to an acceptor on `port` never answers the Logout of a graceful stop,
+// and logs on again on a second connection meanwhile; what the second connection received.
+std::string ReconnectWhileStopping(int port, krx::EventLogFactory& logs) {
+  const FIX::SessionSettings settings = AcceptorOn({port});
+  FIX::NullApplication application;
+  FIX::MemoryStoreFactory store;
+  FIX::ThreadedSocketAcceptor acceptor(application, store, settings, logs);
+  acceptor.start();
+  const Counterparty first(port, LogonFor(port));
+  REQUIRE(logs.Events().WaitFor("Responding to logon request", kWait));
+  const std::jthread stopper([&acceptor] { acceptor.stop(); });
+  REQUIRE(logs.Events().WaitFor("Initiated logout request", kWait));
+  return Counterparty(port, LogonFor(port)).Received(kWait);
+}
+}  // namespace
+
+SCENARIO("A reconnect while the acceptor stops waits for the session's connection to end",
+         "[krx][v1][tsan][u-4]") {
+  GIVEN("an acceptor with a logged-on counterparty that never answers a Logout") {
+    const int port = FreePort();
+    krx::EventLogFactory logs;
+    WHEN("the gateway stops the acceptor and the counterparty connects again meanwhile") {
+      const std::string second = ReconnectWhileStopping(port, logs);
+      THEN("the second connection reaches the session only once the first one is gone") {
+        const std::string events = logs.Events().Dump();
+        INFO("events:\n" << events);
+        REQUIRE((events.find("Disconnecting") < events.find("Session is not enabled for logon") &&
+                 !second.contains("\00135=A\001")));
+      }
+    }
+  }
+}
+
+namespace {
+// Whether the gateway closed `socket` (or never took it) within `timeout`: EOF or an error. One
+// byte goes out first: Linux can drop a connection whose handshake ended as the listener closed
+// and reset it only when it hears from the client (CI, Rocky 9: 1 in 100 rounds); a connection the
+// gateway still holds reads the byte and stays open.
+bool ClosedWithin(FIX::socket_handle socket, std::chrono::milliseconds timeout) {
+  FIX::socket_send(socket, "x", 1);
+  pollfd ready{.fd = socket, .events = POLLIN, .revents = 0};
+  if (poll(&ready, 1, static_cast<int>(timeout.count())) <= 0) {
+    return false;
+  }
+  std::array<char, 64> buffer{};
+  return FIX::socket_recv(socket, buffer.data(), buffer.size()) <= 0;
+}
+
+// Connects to `port` again and again until `stop`; every socket it opened.
+std::vector<FIX::socket_handle> ConnectStorm(int port, const std::atomic<bool>& stop) {
+  std::vector<FIX::socket_handle> sockets;
+  while (!stop.load()) {
+    const FIX::socket_handle socket = FIX::socket_createConnector();
+    // With no listener, Linux can connect a socket to itself when its own port is the port it
+    // dials (both in the ephemeral range): no acceptor ever saw that one (CI, 2 in 100 rounds).
+    const bool connected = FIX::socket_connect(socket, "127.0.0.1", port) >= 0;
+    const int own_port = static_cast<std::uint16_t>(FIX::socket_hostport(socket));
+    if (!connected || own_port == port) {
+      FIX::socket_close(socket);
+      continue;
+    }
+    sockets.push_back(socket);
+  }
+  return sockets;
+}
+
+// Starts an acceptor on `port` and force-stops it `rounds` times while connections keep coming;
+// how many of them the stops left open.
+int LeftOpenByStops(int port, int rounds) {
+  const FIX::SessionSettings settings = AcceptorOn({port});
+  FIX::NullApplication application;
+  FIX::MemoryStoreFactory store;
+  int left_open = 0;
+  for (int round = 0; round < rounds; ++round) {
+    FIX::ThreadedSocketAcceptor acceptor(application, store, settings);
+    acceptor.start();
+    std::atomic<bool> stop_connecting{false};
+    auto storm = std::async(std::launch::async, ConnectStorm, port, std::cref(stop_connecting));
+    std::this_thread::sleep_for(std::chrono::milliseconds(round % 5));
+    acceptor.stop(true);
+    stop_connecting.store(true);
+    for (const FIX::socket_handle socket : storm.get()) {
+      left_open += ClosedWithin(socket, std::chrono::milliseconds(200)) ? 0 : 1;
+      FIX::socket_close(socket);
+    }
+  }
+  return left_open;
+}
+}  // namespace
+
+// Row U-4 (8.2, P0-10): a connection accepted as stop() began was spawned after onStop had
+// collected the threads it joins: it outlived the stop, kept reading, and after a restart a new
+// connection took the same session (two threads on one session, TSan, krx_stress chaos).
+SCENARIO("Every connection accepted while the acceptor stops is closed by the stop",
+         "[krx][v1][tsan][u-4]") {
+  GIVEN("an acceptor that a counterparty keeps connecting to") {
+    const int port = FreePort();
+    WHEN("the gateway starts and force-stops it 100 times while the connections come") {
+      const int left_open = LeftOpenByStops(port, 100);
+      THEN("none of them is left open") {
+        INFO(left_open << " connections still open after the stop");
+        REQUIRE((left_open == 0));
+      }
+    }
+  }
+}
+
+// Q11 (8.7): the initiator's side of row 6.6.
+SCENARIO("A forced initiator stop waiting for the exchange to log out does not spin a CPU",
+         "[krx][v1][u-8]") {
+  GIVEN("an initiator logged on to an exchange that never answers a Logout") {
+    const int port = FreePort();
+    const SilentExchange exchange(port);
+    const FIX::SessionSettings settings = InitiatorTo(port);
+    FIX::NullApplication application;
+    FIX::MemoryStoreFactory store;
+    krx::EventLogFactory logs;
+    FIX::ThreadedSocketInitiator initiator(application, store, settings, logs);
+    initiator.start();
+    REQUIRE(logs.Events().WaitFor("Received logon response", kWait));
+    WHEN("the gateway stops the initiator without waiting") {
+      const auto cpu_before = CpuTime();
+      const auto started = std::chrono::steady_clock::now();
+      initiator.stop(true);
       const auto took = std::chrono::steady_clock::now() - started;
       const auto cpu = CpuTime() - cpu_before;
       THEN("the stop's wait for the logout uses little CPU time") {

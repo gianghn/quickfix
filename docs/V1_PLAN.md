@@ -75,6 +75,9 @@ The owner may change any of these before its phase starts.
 | Q11 | When are the initiator's `stop()` order and `onStop` spin fixed (the acceptor's were, 6.5 and 6.6)? | Phase 8.7, red first · now without a red test · not at all | Phase 8.7, red first | Phase 8 | **Phase 8.7, red first** (owner, 13 Nov 2026) |
 | Q12 | Where do Phase 8's long runs (chaos, TSan hours, soak, fuzzing) run? | a lab machine · GitHub Actions · this Mac in Docker | a lab machine | Phase 8 | **the lab Kubernetes cluster** (owner, 13 Nov 2026): RKE2, 3 × 16 CPU; namespace `krx-soak` with its own quota; a privileged init container only sets `vm.mmap_rnd_bits=28` for TSan; Jobs started by a script in `test/krx/k8s/` |
 | Q13 | Keep the decisions taken without the owner in Phases 6–7? | keep · revisit | keep | — | **keep** (owner, 13 Nov 2026): the `GapFill to N dropped K queued messages` event (7.1), the #755 pick (7.6), `onLogout` after the session reset and outside the lock (6.4) |
+| Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
+| Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
+| Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
 
 ## Ground rules
 
@@ -99,7 +102,7 @@ The owner may change any of these before its phase starts.
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
-| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | not started |
+| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | in progress: 8.1, 8.2, 8.5 fix, 8.7 in #57–#59; the long runs (8.3–8.6) on the lab cluster |
 | 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
 | 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | not started |

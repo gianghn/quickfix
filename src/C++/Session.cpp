@@ -41,6 +41,30 @@ Mutex Session::s_mutex;
 #define LOGEX( method ) try { method; } catch( std::exception& e ) \
   { m_state.onEvent( e.what() ); }
 
+// KRX fork (U-4, U-9): SessionState's own setters, here so there is one copy (SessionState.h).
+void SessionState::receivedReset( bool value ) { m_receivedReset.store( value ); }
+
+void SessionState::sentReset( bool value ) { m_sentReset.store( value ); }
+
+void SessionState::resendRange( int begin, int end )
+{
+  const Locker l( m_mutex );
+  m_resendRange = std::make_pair( begin, end );
+}
+
+void SessionState::maxQueued( int value ) { m_maxQueued.store( value ); }
+
+bool SessionState::queue( int msgSeqNum, const Message& message )
+{
+  const Locker l( m_mutex );
+  const int cap = m_maxQueued.load();
+  if ( cap > 0 && m_queue.size() >= static_cast<std::size_t>( cap )
+       && m_queue.find( msgSeqNum ) == m_queue.end() )
+    return false;
+  m_queue[ msgSeqNum ] = message;
+  return true;
+}
+
 Session::Session( std::function<UtcTimeStamp()> timestamper,
                   Application& application,
                   MessageStoreFactory& messageStoreFactory,
@@ -348,7 +372,10 @@ void Session::nextLogout( const Message& logout, const UtcTimeStamp& now )
   else
     m_state.onEvent( "Received logout response" );
 
-  m_state.incrNextTargetMsgSeqNum();
+  // KRX fork (U-4, P0-10): only the next message moves the expected seqnum on. A Logout above a
+  // gap moved it past the first missing message, which then counted as received and was never
+  // asked for again.
+  if ( isNextTarget( logout ) ) m_state.incrNextTargetMsgSeqNum();
   if ( m_resetOnLogout ) m_state.reset( m_timestamper() );
   disconnect();
 }
@@ -356,8 +383,13 @@ void Session::nextLogout( const Message& logout, const UtcTimeStamp& now )
 void Session::nextReject( const Message& reject, const UtcTimeStamp& now )
 {
   if ( !verify( reject, false, true ) ) return ;
-  m_state.incrNextTargetMsgSeqNum();
+  if ( isNextTarget( reject ) ) m_state.incrNextTargetMsgSeqNum();  // as in nextLogout (U-4)
   nextQueued( now );
+}
+
+bool Session::isNextTarget( const Message& message )
+{
+  return message.getHeader().getField<MsgSeqNum>() == getExpectedTargetNum();
 }
 
 void Session::dropQueuedBelow( int newSeqNo )
@@ -472,17 +504,21 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   bool appMessageJustSent = false;
   std::string messageString;
   const Responder* const responder = m_pResponder;
+  auto nextYield = std::chrono::steady_clock::now();
 
   for ( i = messages.begin(); i != messages.end(); ++i )
   {
-    // KRX fork (P0-3): the caller holds m_mutex; before each message, let the threads waiting for
-    // it in (up to 10 ms, so a stream of senders cannot stall the resend), and stop if the
-    // connection went away meanwhile.
+    // KRX fork (P0-3): the caller holds m_mutex; after each millisecond of resending, let the
+    // threads waiting for it in (for up to a millisecond), and stop if the connection went away
+    // meanwhile. KRX fork (Q15): it was before every message, up to 10 ms each, so a steady order
+    // flow slowed a resend to about 100 messages a second.
+    if ( std::chrono::steady_clock::now() >= nextYield )
     {
       const ReverseLocker unlocked( m_mutex );
-      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 10 );
+      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds( 1 );
       while ( m_mutexWaiters.load() > 0 && std::chrono::steady_clock::now() < until )
         std::this_thread::yield();
+      nextYield = std::chrono::steady_clock::now() + std::chrono::milliseconds( 1 );
     }
     if ( m_pResponder != responder ) return;
     appMessageJustSent = false;
@@ -807,6 +843,7 @@ void Session::disconnect()
   m_state.receivedReset( false );
   m_state.sentReset( false );
   m_state.clearQueue();
+  m_queueDropped = 0;
   m_state.logoutReason();
   if ( m_resetOnDisconnect )
     m_state.reset( m_timestamper() );
@@ -1388,7 +1425,15 @@ void Session::doTargetTooHigh( const Message& msg )
                    + " but received "
                    + IntConvertor::convert( msgSeqNum ) );
 
-  m_state.queue( msgSeqNum, msg );
+  // KRX fork (U-9, Q16): an error event on the first message dropped above a full queue, then on
+  // every thousandth, until the next disconnect.
+  if ( !m_state.queue( msgSeqNum, msg ) && ++m_queueDropped % 1000 == 1 )
+  {
+    const std::string event = "Queue full (" + IntConvertor::convert( m_state.maxQueued() )
+      + " messages): dropped MsgSeqNum " + IntConvertor::convert( msgSeqNum ) + ", "
+      + IntConvertor::convert( m_queueDropped ) + " so far; the resend brings them";
+    m_state.onEvent( event );
+  }
 
   if( m_state.resendRequested() )
   {

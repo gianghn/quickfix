@@ -168,6 +168,11 @@ public:
   int getHeartBtInt();
   void setSendTimeoutMs ( int value )
     { m_sendTimeoutMs = value; }
+  // KRX fork (U-9, Q16): how many messages may wait above a gap (MaxQueuedMessages); 0 no limit.
+  int getMaxQueuedMessages() const
+    { return m_state.maxQueued(); }
+  void setMaxQueuedMessages ( int value )
+    { m_state.maxQueued( value ); }
 
   int getLogoutTimeout()
     { return m_state.logoutTimeout(); }
@@ -334,6 +339,7 @@ private:
   void nextReject( const Message&, const UtcTimeStamp& now );
   void nextSequenceReset( const Message&, const UtcTimeStamp& now );
   void dropQueuedBelow( int newSeqNo ); // KRX fork (P1-5)
+  bool isNextTarget( const Message& message ); // KRX fork (U-4)
   void nextResendRequest( const Message&, const UtcTimeStamp& now );
 
   void generateLogon();
@@ -370,6 +376,8 @@ private:
   bool m_checkLatency;
   int m_maxLatency;
   int m_sendTimeoutMs{ 0 };
+  // KRX fork (U-9): messages dropped above a full queue since the last disconnect.
+  int m_queueDropped{ 0 };
   bool m_resetOnLogon;
   bool m_resetOnLogout;
   bool m_resetOnDisconnect;

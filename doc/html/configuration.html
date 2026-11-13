@@ -705,6 +705,19 @@ AppDataDictionary.FIX.4.4=FIX44.xml
         </tr>
 
         <tr align="left" valign="middle">
+          <td><b>MaxQueuedMessages</b></td>
+
+          <td>(KRX fork) How many messages that arrive above a sequence gap
+          wait for the resend. Past it they are dropped, with an error
+          event, and the open ResendRequest brings them back. 0 keeps every
+          one (no limit).</td>
+
+          <td>0 or a positive integer</td>
+
+          <td>10000</td>
+        </tr>
+
+        <tr align="left" valign="middle">
           <td><b>LogoutTimeout</b></td>
 
           <td>Number of seconds to wait for a logout response

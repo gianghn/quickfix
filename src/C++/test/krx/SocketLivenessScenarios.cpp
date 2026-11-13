@@ -646,6 +646,257 @@ SCENARIO("A large resend stops when its socket is shut down", "[krx][v1][securit
   }
 }
 
+// Row U-6 (8.5, owner decision Q14): after an outage both sides resend, each from its reading
+// thread, so neither read and both sends timed out, again on every reconnect (krx_stress echo-on).
+// The counterparty here only reads once its own backlog is written.
+namespace {
+std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int count,
+                                bool resent = false) {
+  std::string backlog;
+  for (int seq = first_seq; seq < first_seq + count; ++seq) {
+    FIX::Message message;
+    message.getHeader().setField(FIX::MsgType("j"));
+    if (resent) {
+      message.getHeader().setField(FIX::PossDupFlag(true));
+      message.getHeader().setField(FIX::OrigSendingTime(FIX::UtcTimeStamp::now()));
+    }
+    message.setField(FIX::RefMsgType("D"));
+    message.setField(FIX::BusinessRejectReason(0));
+    message.setField(FIX::Text(std::string(1024, 'y')));
+    backlog += pair.FromCounterparty(message, seq);
+  }
+  return backlog;
+}
+
+// Whether `count` application messages reached the gateway's fromApp within 5 s.
+bool AppMessagesReach(const krx::SessionPair& pair, int count) {
+  const auto deadline = std::chrono::steady_clock::now() + kWait;
+  while (pair.AppMessages() < count && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return pair.AppMessages() == count;
+}
+}  // namespace
+
+SCENARIO("A resend completes while the counterparty is resending its own backlog",
+         "[krx][v1][security][u-6]") {
+  GIVEN("a logged-on session with 2000 messages to resend and a 1 s send timeout") {
+    krx::PairOptions options = WithManyStoredMessages("KRXRSU6");
+    options.send_timeout_ms = 1000;
+    krx::SessionPair pair("KRXRSU6", options);
+    LogOn(pair);
+    WHEN("the counterparty asks for them, then writes 2000 messages of its own before reading") {
+      AskForMessagesFrom(pair, 2);
+      const bool written = pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), kWait);
+      const int resent = written ? ReadResent(pair, kResent) : 0;
+      const bool delivered = AppMessagesReach(pair, kResent);
+      // Each of the counterparty's messages arrives once: a second copy is "too low".
+      const bool twice = pair.WaitForEvent("MsgSeqNum too low", std::chrono::milliseconds(300));
+      THEN("every message is resent, the counterparty's all arrive once, no send timed out") {
+        INFO("backlog written: " << written << ", " << resent << " resent, " << pair.AppMessages()
+                                 << " delivered; events:\n"
+                                 << pair.Events().Dump());
+        REQUIRE((written && resent == kResent && delivered && !twice &&
+                 !pair.Events().Contains("Send timed out")));
+      }
+    }
+  }
+}
+
+namespace {
+// Three gateway threads placing orders as fast as they can until `stop`.
+class OrderFlood {
+ public:
+  explicit OrderFlood(krx::SessionPair& pair) {
+    for (int i = 0; i < 3; ++i) {
+      threads_.emplace_back([this, &pair] {
+        while (!stop_.load()) {
+          pair.Send(NewOrder());
+        }
+      });
+    }
+  }
+
+  ~OrderFlood() { stop_.store(true); }
+
+  OrderFlood(const OrderFlood&) = delete;
+  OrderFlood& operator=(const OrderFlood&) = delete;
+  OrderFlood(OrderFlood&&) = delete;
+  OrderFlood& operator=(OrderFlood&&) = delete;
+
+ private:
+  std::atomic<bool> stop_{false};
+  std::vector<std::jthread> threads_;
+};
+
+// The counterparty skips message 2, sends 3 to `count` + 2, waits for the ResendRequest and
+// resends from 2; returns once the gateway's fromApp saw all of them, or after 10 s.
+void SkipThenResend(const krx::SessionPair& pair, int count) {
+  REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 3, count), kWait));
+  REQUIRE(pair.WaitForEvent("Sent ResendRequest", kWait));
+  REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 2, count + 1, true), kWait));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (pair.AppMessages() < count + 1 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+}  // namespace
+
+// Row 3.5 again (8.5, owner decision Q15): the resend let waiting senders in before every message,
+// up to 10 ms each, so under a steady order flow it crawled at about 100 messages a second and
+// the peer queued everything sent meanwhile (krx_stress echo-on: 1.9 GB, OOM).
+SCENARIO("A large resend finishes quickly while senders keep placing orders",
+         "[krx][v1][security][p0-3]") {
+  GIVEN("a logged-on session with 2000 messages to resend and three senders placing orders") {
+    krx::SessionPair pair("KRXRSQ15", WithManyStoredMessages("KRXRSQ15"));
+    LogOn(pair);
+    const OrderFlood flood(pair);
+    WHEN("the counterparty asks for them all and reads as fast as it can") {
+      const auto asked = std::chrono::steady_clock::now();
+      AskForMessagesFrom(pair, 2);
+      const int resent = ReadResent(pair, kResent);
+      const auto took = std::chrono::steady_clock::now() - asked;
+      THEN("all 2000 arrive within 5 seconds") {
+        INFO(resent << " resent in "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+                    << " ms");
+        REQUIRE((resent == kResent && took < std::chrono::seconds(5)));
+      }
+    }
+  }
+}
+
+// Row U-9 (8.3, owner decision Q16): messages above a gap were queued without a limit.
+SCENARIO("At most 10,000 messages wait above a gap, and the resend brings the rest",
+         "[krx][v1][security][u-9]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU9");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3 to 20002, then resends from 2") {
+      SkipThenResend(pair, 20000);
+      THEN("the queue stopped at 10,000, said so, and every message arrived once") {
+        INFO(pair.AppMessages() << " delivered");
+        // 10,000 dropped: an event on the 1st, 1001st, … 9001st.
+        REQUIRE((pair.Events().Count("Queue full") == 10 && pair.AppMessages() == 20001));
+      }
+    }
+  }
+}
+
+namespace {
+// The counterparty skips message 2, sends 3, then `admin` (its MsgType set) as 4; the session's
+// next expected target seqnum after that.
+int ExpectedAfterGapThen(const krx::SessionPair& pair, FIX::Message admin) {
+  FIX::Message order;
+  order.getHeader().setField(FIX::MsgType("j"));
+  order.setField(FIX::RefMsgType("D"));
+  order.setField(FIX::BusinessRejectReason(0));
+  pair.Write(pair.FromCounterparty(order, 3));
+  REQUIRE(pair.WaitForEvent("Sent ResendRequest", kWait));
+  pair.Write(pair.FromCounterparty(std::move(admin), 4));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  return pair.Store()->getNextTargetMsgSeqNum();
+}
+}  // namespace
+
+// Row U-4 (8.2, P0-10): a Logout or Reject above a gap moved the expected seqnum on by one, so the
+// first missing message counted as received and the resend after the next logon skipped it
+// (krx_stress echo-on: single orders lost with no GapFill or Reject; the research's seq 26173).
+SCENARIO("A Logout above a gap leaves the missing message to the resend",
+         "[krx][v1][security][u-4]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU4L");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3, then logs out as 4") {
+      FIX::Message logout;
+      logout.getHeader().setField(FIX::MsgType("5"));
+      const int expected = ExpectedAfterGapThen(pair, logout);
+      THEN("the session still expects message 2") {
+        INFO("expects " << expected << "; events:\n" << pair.Events().Dump());
+        REQUIRE((expected == 2));
+      }
+    }
+  }
+}
+
+SCENARIO("A Reject above a gap leaves the missing message to the resend",
+         "[krx][v1][security][u-4]") {
+  GIVEN("a logged-on session") {
+    krx::SessionPair pair("KRXRSU4R");
+    LogOn(pair);
+    WHEN("the counterparty skips message 2, sends 3, then a Reject as 4") {
+      FIX::Message reject;
+      reject.getHeader().setField(FIX::MsgType("3"));
+      reject.setField(FIX::RefSeqNum(1));
+      const int expected = ExpectedAfterGapThen(pair, reject);
+      THEN("the session still expects message 2") {
+        INFO("expects " << expected << "; events:\n" << pair.Events().Dump());
+        REQUIRE((expected == 2));
+      }
+    }
+  }
+}
+
+// Row U-8 (8.7): what U-6's wait read was all handed to the session after stop() had shut the
+// socket down, so stop() waited for up to 64 MB of messages (krx_stress echo-on, 2 of 20 runs).
+SCENARIO("A shut-down connection drops the backlog it read while sending",
+         "[krx][v1][security][u-8]") {
+  GIVEN("a session resending 2000 messages while the counterparty writes 20,000 of its own") {
+    krx::SessionPair pair("KRXRSU8D", WithManyStoredMessages("KRXRSU8D"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 3, 20000), kWait));
+    WHEN("the engine shuts the socket down, as stop() does") {
+      ::shutdown(pair.SessionSocket(), SHUT_RDWR);
+      pair.WaitReaderStopped();
+      THEN("the session stops instead of processing the rest of that backlog") {
+        INFO(pair.AppMessages() << " of 20000 processed after the shutdown");
+        REQUIRE((pair.AppMessages() < 20000));
+      }
+    }
+  }
+}
+
+// Row U-9 (Q16): the cap is the MaxQueuedMessages setting; 0 is no limit, as upstream.
+SCENARIO("The MaxQueuedMessages setting caps the queue above a gap", "[krx][v1][security][u-9]") {
+  GIVEN("an acceptor session configured with MaxQueuedMessages=5") {
+    FIX::Dictionary settings;
+    settings.setString("ConnectionType", "acceptor");
+    settings.setBool("UseDataDictionary", false);
+    settings.setString("StartTime", "00:00:00");
+    settings.setString("EndTime", "00:00:00");
+    settings.setInt("MaxQueuedMessages", 5);
+    krx::LogonWatcher application;
+    FIX::MemoryStoreFactory stores;
+    FIX::SessionFactory factory(application, stores, nullptr);
+    const FIX::SessionID id(FIX::BeginString("FIX.4.4"), FIX::SenderCompID("KRXGW"),
+                            FIX::TargetCompID("KRXMQM"));
+    FIX::Session* session = factory.create(id, settings);
+    THEN("at most 5 messages wait above a gap") {
+      const int cap = session->getMaxQueuedMessages();
+      factory.destroy(session);
+      REQUIRE((cap == 5));
+    }
+  }
+}
+
+SCENARIO("A queue refuses messages past its cap, and 0 means no limit", "[krx][v1][u-9]") {
+  GIVEN("a session state") {
+    FIX::SessionState state(FIX::UtcTimeStamp::now());
+    WHEN("its cap is 2 and three messages arrive, then the cap is 0 and one more arrives") {
+      state.maxQueued(2);
+      const bool first = state.queue(3, FIX::Message());
+      const bool second = state.queue(4, FIX::Message());
+      const bool third = state.queue(5, FIX::Message());
+      state.maxQueued(0);
+      const bool fourth = state.queue(6, FIX::Message());
+      THEN("the third is refused and the fourth is kept") {
+        REQUIRE((first && second && !third && fourth));
+      }
+    }
+  }
+}
+
 SCENARIO("A signal storm on an idle session causes no disconnect", "[krx][v1][security][p1-3]") {
   GIVEN("a logged-on, idle session") {
     InstallInterruptingHandler();

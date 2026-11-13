@@ -25,8 +25,11 @@
 #include <cerrno>
 #endif
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <string>
+#include <thread>
 
 #include "ThreadedSocketConnection.h"
 #include "ThreadedSocketAcceptor.h"
@@ -80,16 +83,6 @@ ThreadedSocketConnection::~ThreadedSocketConnection()
 #ifndef _MSC_VER
 namespace
 {
-// KRX fork (P0-3): false once `deadline` has passed; otherwise true when `s` takes more bytes or a
-// signal woke the wait, and the caller sends again (the send itself reports a real error).
-bool waitWritable( socket_handle s, std::chrono::steady_clock::time_point deadline )
-{
-  const int left = std::chrono::duration_cast<std::chrono::duration<int, std::milli>>(
-    deadline - std::chrono::steady_clock::now() ).count();
-  pollfd pfd{ s, POLLOUT, 0 };
-  return left > 0 && poll( &pfd, 1, left ) != 0;
-}
-
 // KRX fork (P1-12): true once the non-blocking connect on `s` has succeeded within `timeoutMs`.
 // A timeout or a signal fails this attempt; the initiator tries again (with the next host).
 bool waitConnected( socket_handle s, int timeoutMs )
@@ -123,6 +116,60 @@ void setLiveness( socket_handle s, int heartBtInt )
 }
 #endif
 
+#ifndef _MSC_VER
+// KRX fork (P0-3): false once `deadline` has passed; otherwise true when the socket takes more
+// bytes or a signal woke the wait, and the caller sends again (the send itself reports a real
+// error). KRX fork (U-6, Q14): on the reading thread it also reads what arrives meanwhile.
+bool ThreadedSocketConnection::waitWritable( std::chrono::steady_clock::time_point deadline )
+{
+  const int left = std::chrono::duration_cast<std::chrono::duration<int, std::milli>>(
+    deadline - std::chrono::steady_clock::now() ).count();
+  const bool reading = m_reader.load() == std::this_thread::get_id() && !m_peerClosed
+                       && m_drained.size() < MAX_DRAINED;
+  // One entry to write, and one to read when this is the reading thread.
+  std::array<pollfd, 2> pfds{ { { m_socket, POLLOUT, 0 }, { m_socket, POLLIN, 0 } } };
+  if ( poll( pfds.data(), reading ? 2 : 1, std::max( left, 0 ) ) == 0 ) return false;
+  if ( reading && pfds[1].revents != 0 )
+  {
+    std::array<char, BUFSIZ> chunk{};
+    const ssize_t size = socket_recv( m_socket, chunk.data(), chunk.size() );
+    if ( size > 0 ) m_drained.append( chunk.data(), static_cast<std::size_t>( size ) );
+    else m_peerClosed = true;  // read() finds out on its own
+  }
+  return true;
+}
+#endif
+
+// KRX fork (U-8): true once the socket is shut down or broken (it does not wait).
+bool ThreadedSocketConnection::shutDown() const
+{
+#ifdef _MSC_VER
+  return false;
+#else
+  pollfd pfd{ m_socket, POLLOUT, 0 };
+  return poll( &pfd, 1, 0 ) > 0 && pfd.revents != POLLOUT;
+#endif
+}
+
+// KRX fork (U-6, Q14): hands the next part of what waitWritable read to the parser; false when
+// nothing is left, and read() reads the socket.
+bool ThreadedSocketConnection::feedDrained()
+{
+  if ( m_drainedAt == m_drained.size() ) return false;
+  // KRX fork (U-8): unless the socket was shut down meanwhile (stop()): then that backlog is
+  // dropped, as unread bytes are; nothing in it moved the sequence numbers on.
+  if ( shutDown() ) throw SocketRecvFailed( 0 );
+  const std::size_t size = std::min( sizeof( m_buffer ), m_drained.size() - m_drainedAt );
+  m_parser.addToStream( m_drained.substr( m_drainedAt, size ) );
+  m_drainedAt += size;
+  if ( m_drainedAt == m_drained.size() )
+  {
+    m_drained.clear();
+    m_drainedAt = 0;
+  }
+  return true;
+}
+
 bool ThreadedSocketConnection::send( const std::string& msg )
 {
 #ifndef _MSC_VER
@@ -153,7 +200,7 @@ bool ThreadedSocketConnection::send( const std::string& msg )
     // Linux and macOS).
     if( sent < 0 && errno == EAGAIN )
     {
-      if( waitWritable( m_socket, deadline ) ) continue;
+      if( waitWritable( deadline ) ) continue;
       const std::string event = "Send timed out after " + std::to_string( timeoutMs ) + " ms: disconnecting";
       if( m_pSession ) m_pSession->getLog()->onEvent( event );
       shutdown( m_socket, 2 );
@@ -216,13 +263,15 @@ bool ThreadedSocketConnection::read()
   struct pollfd pfd = { m_socket, POLLIN | POLLPRI, 0 };
 #endif
 
+  m_reader = std::this_thread::get_id();
   try
   {
-    // Wait for input (1 second timeout)
+    // Wait for input (1 second timeout); KRX fork (U-6): what a send's wait read comes first.
+    const bool drained = feedDrained();
 #if _MSC_VER
-    int result = select( 0, &readset, 0, 0, &timeout );
+    const int result = drained ? 0 : select( 0, &readset, 0, 0, &timeout );
 #else
-    int result = poll( &pfd, 1, timeout );
+    const int result = drained ? 0 : poll( &pfd, 1, timeout );
 #endif
 
     if( result > 0 ) // Something to read

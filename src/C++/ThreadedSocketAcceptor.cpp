@@ -27,6 +27,8 @@
 #include "Settings.h"
 #include "Utility.h"
 
+#include <memory>
+
 namespace FIX
 {
 // KRX fork (P1-4): whether the accept loop goes on after accept failed with `error`: at once after
@@ -272,6 +274,16 @@ THREAD_PROC ThreadedSocketAcceptor::socketAcceptorThread( void* p )
 
     {
       Locker l( pAcceptor->m_mutex );
+
+      // KRX fork (U-4, P0-10): accepted as stop() began, after onStop took the threads it joins
+      // (under this lock): never joined, the connection outlived the acceptor and could take over
+      // a session after a restart. It is closed instead.
+      if ( pAcceptor->isStopped() )
+      {
+        const std::unique_ptr < ConnectionThreadInfo > ownedInfo( info );
+        const std::unique_ptr < ThreadedSocketConnection > ownedConnection( pConnection );
+        break;
+      }
 
       std::stringstream stream;
       stream << "Accepted connection from " << socket_peername( socket ) << " on port " << port;
