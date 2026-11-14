@@ -615,11 +615,37 @@ merged; test-only fixes for CI flakes (`FreePorts`, skipping Linux self-connecti
 probe before the stop check); the fork's `SessionState` setters moved to `Session.cpp` so Mull
 mutates the one copy the tests run; Q11 needed no change (no failing test).
 **Away from the spec:** none.
-**Left for the owner:** the last cluster round (`26f4e4c2`, before the merged head) had 5 of 20
-echo-on runs not back in step within 300 s (seeds 5, 11, 18, 19, 20) and one initiator stop over
-15 s (seed 17), with nodes short of CPU; seed 5 passed locally; the next echo-on round runs with
-`--file-log` to trace it. Stateful session fuzzing (8.6) is not built yet. The 8 h soak needs a
-harness change (it keeps every message today).
+**Left for the owner:** see "Long runs" below.
+
+**Long runs (added 14 Nov 2026; numbers in `test/krx/BASELINE.md`).** After #61 the long runs found
+two more defects, fixed test-first and merged: #64 (a restarted acceptor kept its old listening
+sockets; the TSan 1 h seed 7 race in `socket_close`) and #65 (a resend now reads its range 1000
+messages at a time, Q17). #63 and #70 are harness work (soak mode, the soak keeps each message's
+MsgSeqNum, `run.sh --disk`); #71 adds stateful session fuzzing (8.6's second half: a live session
+before logon, mid-resend and during logout, row 1.9).
+- 8.3: the final batch, 55 of 55 runs without echo with LOST = 0 (Release 20, ASan+UBSan 20, TSan
+  15).
+- 8.4: TSan 1 h × 10: 9 of 10 on `dab82397`; seed 7 failed on the race #64 fixed. Seed 7 rerun on
+  `cdb48561`: *running when this was written*.
+- 8.5: echo on at 1,000 orders/s, 20 of 20, no hang. Both 8 h Release soaks on `8f376fd8` (with
+  #64, #65) PASS: 54,029,648 orders without echo, 53,836,238 each way with echo; LOST = DUP = OOO
+  = 0; about 6,300 and 6,860 logons; 1,773 chaos stops and restarts, none over its limit; fds
+  58 → 63. RSS grows 64 B per stored message (3.6 and 7.1 GB at 8 h): FileStore's `std::map`
+  offsets index, by a heap profile; freed when the store resets. Accepted by the owner for 8.5 (14
+  Nov 2026); a smaller index is parked as 15.8. The first 8 h soak (on `dab82397`, before #64 and
+  #65) lost 61 orders across all sessions at one point and could not be traced (`--soak` did not
+  keep MsgSeqNums then); the rerun with the record kept lost none.
+- 8.6: libFuzzer over FixInput's five modes, 120 CPU-h, no crash (the exit leak check could not
+  run on one node's 3 pods). Stateful session fuzzing, 24 CPU-h, no crash, leak check clean.
+
+Open:
+- Echo-on chaos with **no send rate** (each sender as fast as it can, both sides resending at
+  once) still fails on the busiest node: 7 of 20 on `d7ec76ce` (the same engine as the rated
+  round), runs 0.2–1.6 M orders behind after 300 s and 2 initiator stops over their deadline (2
+  more on `e53f084d`). Not explained yet: overload of the node or an engine limit. The rated round
+  and the soaks hold, so it does not block Phase 8 as written; the owner decides whether to trace
+  it (with `--event-log` and stacks) before go-live.
+- U-5 waits for seed 7's rerun.
 
 ### Handover 15 — 14 Nov 2026
 
