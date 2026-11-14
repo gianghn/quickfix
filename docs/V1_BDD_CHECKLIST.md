@@ -24,6 +24,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 1.6 | A typed message's header is never treated as a type it is not | 1.4d |
 | [x] 1.7 | A new gap after a long queue drains is requested again (also on a slow, sanitized run) | 1.4e |
 | [x] 1.8 | A polled plain acceptor gives its port back when destroyed, and closes its listening socket once | 1.4f |
+| [x] 1.9 | Every stateful fuzz seed replays through a live session in the state it was made for | 8.6 |
 
 ## 2. Hostile input — Phase 2 (src/C++/test/krx/InboundFramingScenarios.cpp)
 

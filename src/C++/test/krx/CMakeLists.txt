@@ -5,7 +5,7 @@ add_executable(krx_ut HarnessScenarios.cpp DictionaryScenarios.cpp FieldAccessSc
   TypedHeaderScenarios.cpp PlainAcceptorScenarios.cpp InboundFramingScenarios.cpp
   SocketLivenessScenarios.cpp TeardownRaceScenarios.cpp StoreDurabilityScenarios.cpp
   SendTruthScenarios.cpp UpstreamPicksScenarios.cpp StoreThroughputScenarios.cpp SessionPair.cpp
-  FixInput.cpp)
+  FixInput.cpp SessionInput.cpp)
 target_include_directories(krx_ut SYSTEM PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src/C++)
 target_link_libraries(krx_ut PRIVATE ${PROJECT_NAME} krx_catch)
 target_compile_features(krx_ut PRIVATE cxx_std_23)
@@ -50,5 +50,18 @@ if(KRX_FUZZ)
   target_link_options(krx_fuzz PRIVATE -fsanitize=fuzzer)
   if(COMMAND house_target)
     house_target(krx_fuzz)
+  endif()
+
+  # Stateful session fuzzing (8.6): a live session on a socketpair, read on the fuzzing thread.
+  add_executable(krx_session_fuzz SessionFuzzEntry.cpp SessionInput.cpp SessionPair.cpp)
+  target_include_directories(krx_session_fuzz SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/src/C++)
+  target_link_libraries(krx_session_fuzz PRIVATE ${PROJECT_NAME})
+  target_compile_features(krx_session_fuzz PRIVATE cxx_std_23)
+  target_compile_definitions(krx_session_fuzz PRIVATE KRX_SPEC_DIR="${PROJECT_SOURCE_DIR}/spec")
+  target_compile_options(krx_session_fuzz PRIVATE -fsanitize=fuzzer)
+  target_link_options(krx_session_fuzz PRIVATE -fsanitize=fuzzer)
+  if(COMMAND house_target)
+    house_target(krx_session_fuzz)
   endif()
 endif()
