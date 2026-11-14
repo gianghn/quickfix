@@ -4,8 +4,11 @@
 # commit, builds krx_stress in its variant and runs it; its log is the run's record.
 #
 #   run.sh setup                                  the namespace and its quota (namespace.yaml)
-#   run.sh start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] -- STRESS_ARGS...
+#   run.sh start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] [--memory GI]
+#                                                 -- STRESS_ARGS...
 #                                                 VARIANT: release, asan (ASan+UBSan) or tsan;
+#                                                 fuzz: krx_fuzz instead (ASan, clang 18),
+#                                                 STRESS_ARGS are libFuzzer's (8.6);
 #                                                 {seed} in STRESS_ARGS is the pod's seed;
 #                                                 --engine: today's harness on an older engine
 #                                                 (a red run)
@@ -14,6 +17,11 @@
 #
 # e.g. 50 ASan chaos runs, 10 at a time (8.3):
 #   run.sh start chaos-asan asan 50 10 -- 90 4 3 7700 {seed} /tmp/w --no-echo
+# an 8 h soak (8.5):
+#   run.sh start soak release 1 1 --hours 9 --cpu 1 -- 28800 4 3 7700 1 /tmp/w --soak --rate=200 \
+#     --chaos-ms=5000 --report=60 --settle=600
+# 120 CPU-hours of fuzzing, about 24 per mode (8.6):
+#   run.sh start fuzz fuzz 10 10 --hours 13 --cpu 1 -- -max_total_time=43200 -rss_limit_mb=4096
 # The commit is HEAD, which must be pushed (the pods clone it from GitHub). KUBECONFIG must point
 # at the lab cluster (rke2-lab-ansible/fetched/kubeconfig.yaml).
 set -euo pipefail
@@ -21,6 +29,8 @@ set -euo pipefail
 readonly NAMESPACE=krx-soak
 readonly REPO=https://github.com/gianghn/quickfix.git
 ENGINE="" # --engine: the engine's sources (src/C++ but its tests) from this commit instead
+CPU=2     # --cpu: CPUs a pod requests (it may use twice that); a soak or a fuzzer needs 1
+MEMORY=6  # --memory: the pod's memory limit in GiB (it requests half); an echo-on soak needs 16
 HERE=$(cd "$(dirname "$0")" && pwd)
 readonly HERE
 
@@ -34,13 +44,36 @@ pod_script() {
   cat <<'SCRIPT'
 set -euo pipefail
 seed=$((JOB_COMPLETION_INDEX + 1))
+packages="g++ cmake make git ca-certificates gdb"
+if [ "$VARIANT" = fuzz ]; then packages="$packages clang-18 libclang-rt-18-dev"; fi
 apt-get update -qq >/dev/null
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-  g++ cmake make git ca-certificates >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $packages >/dev/null
 git clone -q --filter=blob:none "$REPO" /w/src
 git -C /w/src checkout -q "$COMMIT"
 if [ -n "$ENGINE" ]; then
   git -C /w/src checkout -q "$ENGINE" -- src/C++ ':!src/C++/test'
+fi
+read -ra args <<<"${STRESS_ARGS//\{seed\}/$seed}"
+echo "commit=$COMMIT engine=${ENGINE:-same} variant=$VARIANT seed=$seed node=$NODE"
+if [ "$VARIANT" = fuzz ]; then
+  # Plan item 8.6: libFuzzer with ASan over FixInput's five modes, as the nightly CI job. A crash
+  # input is printed in base64, since the pod's disk goes with it.
+  flags="-fsanitize=address,fuzzer-no-link -g"
+  CC=clang-18 CXX=clang++-18 cmake -S /w/src -B /w/build -DCMAKE_BUILD_TYPE=Debug -DKRX_FUZZ=ON \
+    -DQUICKFIX_EXAMPLES=OFF "-DCMAKE_CXX_FLAGS=$flags" -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address \
+    -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address >/w/build.log 2>&1 \
+    || { tail -50 /w/build.log; exit 2; }
+  cmake --build /w/build --target krx_fuzz --parallel "$(nproc)" >>/w/build.log 2>&1 \
+    || { tail -50 /w/build.log; exit 2; }
+  mkdir -p /w/corpus /w/crashes
+  rc=0
+  /w/build/src/C++/test/krx/krx_fuzz "${args[@]}" -seed="$seed" -artifact_prefix=/w/crashes/ \
+    /w/corpus /w/src/test/krx/corpus || rc=$?
+  for input in /w/crashes/*; do
+    if [ -f "$input" ]; then echo "CRASH INPUT $input: $(base64 -w0 "$input")"; fi
+  done
+  if [ "$rc" = 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FUZZ EXIT $rc"; fi
+  exit "$rc"
 fi
 case "$VARIANT" in
   asan) flags="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" ;;
@@ -54,9 +87,29 @@ cmake -S /w/src -B /w/build -DCMAKE_BUILD_TYPE="$build_type" -DQUICKFIX_EXAMPLES
   >/w/build.log 2>&1 || { tail -50 /w/build.log; exit 2; }
 cmake --build /w/build --target krx_stress --parallel "$(nproc)" >>/w/build.log 2>&1 \
   || { tail -50 /w/build.log; exit 2; }
-read -ra args <<<"${STRESS_ARGS//\{seed\}/$seed}"
-echo "commit=$COMMIT engine=${ENGINE:-same} variant=$VARIANT seed=$seed node=$NODE"
-exec /w/build/src/C++/test/krx/krx_stress "${args[@]}"
+rc=0
+/w/build/src/C++/test/krx/krx_stress "${args[@]}" >/w/out.log 2>&1 &
+pid=$!
+tail -n +1 -f --pid="$pid" /w/out.log &
+# A hang or a stalled settle (with --hang-grace): every thread's stack, once.
+dumped=""
+while kill -0 "$pid" 2>/dev/null; do
+  if [ -z "$dumped" ] && grep -qE '\*\*\* (HANG|STALLED)' /w/out.log; then
+    gdb -p "$pid" -batch -ex 'thread apply all bt 25' 2>&1 | grep -vE '^\[New LWP' | head -600 || true
+    dumped=yes
+  fi
+  sleep 2
+done
+wait "$pid" || rc=$?
+sleep 1
+# A failed run with --event-log or --file-log: each session's last events (the pod's disk goes).
+if [ "$rc" != 0 ] && [ -d "${args[5]:-/nonexistent}" ]; then
+  find "${args[5]}" -name '*.event.current.log' | sort | while read -r log; do
+    echo "== $log"
+    tail -n 150 "$log"
+  done
+fi
+exit "$rc"
 SCRIPT
 }
 
@@ -115,13 +168,20 @@ YAML
             - {name: VARIANT, value: "$variant"}
             - {name: STRESS_ARGS, value: "$stress_args"}
             - {name: ASAN_OPTIONS, value: "detect_leaks=1:detect_stack_use_after_return=1"}
+            - {name: LSAN_OPTIONS, value: "verbosity=1:log_threads=1"}
             - {name: UBSAN_OPTIONS, value: "print_stacktrace=1:halt_on_error=1"}
             - {name: TSAN_OPTIONS, value: "halt_on_error=1:second_deadlock_stack=1"}
             - name: NODE
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
           resources:
-            requests: {cpu: "2", memory: 3Gi, ephemeral-storage: 4Gi}
-            limits: {cpu: "4", memory: 6Gi, ephemeral-storage: 8Gi}
+            requests: {cpu: "$CPU", memory: $((MEMORY / 2))Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "$((CPU * 2))", memory: ${MEMORY}Gi, ephemeral-storage: 8Gi}
+          # gdb takes the stacks of a hang and LeakSanitizer stops the threads it checks, both with
+          # ptrace: Yama wants the capability, the runtime's AppArmor and seccomp profiles deny it.
+          securityContext:
+            capabilities: {add: [SYS_PTRACE]}
+            appArmorProfile: {type: Unconfined}
+            seccompProfile: {type: Unconfined}
           volumeMounts:
             - {name: work, mountPath: /w}
       volumes:
@@ -131,16 +191,21 @@ YAML
 }
 
 start() {
-  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] -- ARGS..."
+  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] [--memory GI] -- ARGS..."
   local name=$1 variant=$2 runs=$3 parallel=$4 hours=4
   shift 4
-  while [[ ${1:-} == --hours || ${1:-} == --engine ]]; do
-    if [[ $1 == --hours ]]; then hours=$2; else ENGINE=$2; fi
+  while [[ ${1:-} =~ ^--(hours|engine|cpu|memory)$ ]]; do
+    case "$1" in
+      --hours) hours=$2 ;;
+      --engine) ENGINE=$2 ;;
+      --memory) MEMORY=$2 ;;
+      *) CPU=$2 ;;
+    esac
     shift 2
   done
   [[ ${1:-} == -- ]] || die "missing -- before the krx_stress arguments"
   shift
-  case "$variant" in release | asan | tsan) ;; *) die "variant: release, asan or tsan" ;; esac
+  case "$variant" in release | asan | tsan | fuzz) ;; *) die "variant: release, asan, tsan or fuzz" ;; esac
   local commit pushed manifest
   commit=$(git rev-parse HEAD)
   pushed=$(git branch -r --contains "$commit")
