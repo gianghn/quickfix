@@ -46,7 +46,7 @@ is [V1_PLAN.md](V1_PLAN.md); the fix ledger is [`KRX_FORK_NOTES.md`](../KRX_FORK
 | Our scenarios | `src/C++/test/krx/*Scenarios.cpp` (Catch2 `SCENARIO`/`GIVEN`/`WHEN`/`THEN`, target `krx_ut`) | `krx_ut` (all), `krx_ut "[p0-3]"` (one defect), or `ctest` in the build folder |
 | FIX acceptance | `test/definitions/server/fix4*/` | `cd test && ./runat.sh 6666`, `./runat_threaded.sh 6666` |
 | Seed replay | every I8/E8 message of the acceptance `.def` files, through the five fuzz modes (`FixInput`) | part of `krx_ut` |
-| Stress and chaos | `test/krx/stress.cpp`, `run_stress.sh` | `run_stress.sh <build> <seconds> <threads> <sessions> <port>`; `STRESS_SEED`, `STRESS_NO_ECHO`, `STRESS_FILELOG` |
+| Stress and chaos | `src/C++/test/krx/Stress.cpp` (`krx_stress`), `test/krx/k8s/run.sh` | `krx_stress [seconds] [sessions] [threads] [port] [seed] [workdir] [--no-echo] [--file-log] [--settle=S] [--hang-grace=S] [--stop-limit=S]`; on the lab cluster `run.sh start NAME release\|asan\|tsan RUNS PARALLEL [--hours H] [--engine SHA] -- ARGS` (`{seed}` = the pod's seed), then `run.sh results NAME` |
 | Fuzzing | `test/krx/fuzz_message.cpp` (5 modes, incl. chunked `Parser`) | nightly 30 min in CI; 24 CPU-h per mode before a release |
 | Benchmark | `test/krx/bench.cpp` | before and after any send, store or socket change |
 | quickfix-rs | `gianghn/quickfix-rs` `quickfix/tests/` | `cargo test`; `cargo-mutants` on the callback module |

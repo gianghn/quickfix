@@ -104,7 +104,7 @@ The owner may change any of these before its phase starts.
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
-| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | in progress: 8.1, 8.2, 8.5 fix, 8.7 in #57–#59; the long runs (8.3–8.6) on the lab cluster |
+| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | code merged (#57–#61, #63–#65, #70, #71; Handover 8): 8.1, 8.2, 8.5, 8.6, 8.7 done; 8.3 and 8.4 results in Handover 8 |
 | 9 | quickfix-rs fork fails closed | 9.1–9.6 | P0-9, Trap-3, Q18 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
 | 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | not started |
@@ -118,9 +118,9 @@ The owner may change any of these before its phase starts.
 1. ~~**Owner:** merge the Phase 3–5 stacks~~ merged (#31–#44, 12 Nov 2026). #45 fixes `krx/main`'s nightly mutation job (`ut` crashed on store files a mutant left behind).
 2. ~~3.7 P1-12~~ done in #34 (row 3.11). The gateway needs a short `ReconnectInterval` (1–2 s) for a 5 s failover.
 3. ~~Row 3.2~~ test in #35 (a guard: it already held).
-4. 3.8: the resend-under-contention benchmark, then the yield decision with the owner (not urgent: 4–8 cores, no CPU limit).
+4. ~~3.8: the yield decision~~ taken (Q15, bounded yield, #60); the resend-under-contention number is in BASELINE.md (20,083 ms → 9 ms).
 5. ~~Phase 3 handover~~ written (Handover 3, in #35).
-6. ~~Phase 6~~ merged (#45–#50, Handover 6). ~~Phase 7~~ merged (#51–#55, Handover 7). Next: Phase 8 (gap root cause, long runs on the lab Kubernetes cluster, Q12; 8.7 also takes the initiator's stop order and `onStop` spin, Q11). The nightly mutation job runs one job per binary (Q9).
+6. ~~Phase 6~~ merged (#45–#50, Handover 6). ~~Phase 7~~ merged (#51–#55, Handover 7). Phase 8's code is merged (#57–#61, `784e1b0c`, Handover 8); its long runs run on the lab cluster (Q12): 8.3's final 55-run batch, 8.4 (TSan 1 h × 10 seeds), 8.5 (20 echo-on runs and the 8 h soak, which needs a harness that does not keep every message), 8.6 (fuzzing; stateful session fuzzing is not built yet). Open from the last round: echo-on runs that did not get back in step within 300 s (5 of 20 on `26f4e4c2`).
 7. Q1–Q8 answered (12 Nov 2026), so no owner question blocks a phase now: Phase 4 (sync plus runbook) and Phase 5 can start after Phase 3. The gateway has 4–8 cores and no CPU limit, so 3.8 is not urgent. The KRX dictionary is `quickfix-rs/quickfix-msgkrx/src/FIX44KRX.xml`; HOSE throttles and the certification script are still to be located (Phases 10, 11, 14).
 
 ## Phases
@@ -349,6 +349,14 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   returns all or none). No extra thread; `send()` keeps its meaning and its per-message sync. The
   gateway drains each session's order queue into one call from one sender thread, never waiting to
   fill a batch, at most `MAX_BATCH` (proposed 64) a call (Phase 10). Red first (rows 15.15–15.17).
+- 15.8 *Parked idea (owner, 14 Nov 2026), not planned:* FileStore's offsets index as a `std::deque`
+  of 16-byte slots indexed by `seqnum − first`, instead of a `std::map` node (64 B and one `malloc`)
+  per stored message. Found by the 8.5 soak profile: memory grows 64 B per stored message, freed at
+  reset (about 64 MB per session for a 1 M-message day; 8.5 accepts it). Gains: about 4× less
+  memory, no `malloc` per send. Costs: a high-risk FileStore change; tests for overwrites
+  (`insert_or_assign` on send, `insert` keeps the first on reload), a seqnum lowered below the
+  first slot, `get` across empty slots, reload; a large seqnum jump costs 16 B per empty slot.
+  Measure with `krx_bench` before deciding.
 
 **Spike results (13 Nov 2026, U-17; numbers in `test/krx/BASELINE.md`).** Measured on Linux in the
 lab cluster (a pod in namespace `krx-bench`, store on a node's consumer NVMe) and on the Mac with
@@ -565,6 +573,78 @@ the counterparty gap-filling messages it sent is worth an alert) and leaves out 
 here; the four validation setting names became `constexpr const char*` (house lint).
 **Away from the spec:** none.
 **Left for the owner:** merge #51–#55 in order (each retargeted and green first). Next: Phase 8.
+
+### Handover 8 — 14 Nov 2026
+
+**Built:** 8.1 `krx_stress` (`src/C++/test/krx/Stress.cpp`): the research harness under the house
+rules; senders send only while logged on, the settle waits until both sides agree on every
+sequence number, and each lost order is traced to its MsgSeqNum and to any GapFill or Reject.
+`test/krx/k8s/` runs it on the lab cluster (Q12: namespace `krx-soak`, one Indexed Job per suite,
+`--engine SHA` for a red run on an older engine). 8.2 the P0-10 root cause, written in
+`KRX_FORK_NOTES.md`: two connections could drive one acceptor session (`Acceptor::stop` gave the
+session up before its connection ended; a connection accepted as `stop()` began was never
+joined), and a Logout or Reject above a gap marked the first missing message as received. 8.5
+the fixes the echo-on runs needed (U-6, Q14; Q15; U-9, Q16). 8.7 the stop fixes (U-8) and Q11.
+PRs #57–#61, merged through #61 (`784e1b0c`).
+**Red → green:**
+- U-8 resend stops on a failed send (#57): all 2000 "resent" after the shutdown → stops at once;
+  `krx_stress` seed 4 hung in the initiator's `stop()` → PASS.
+- U-6 mutual resends (#58): backlog never written, "Send timed out" → all 2000 resent, all 2000 of
+  the counterparty's delivered once; echo-on seed 2 never in step → in step in 24 s, LOST 0.
+- U-4 two connections (#59): a reconnect reached the session during `stop()` (3 of 3) → only
+  after the first connection ended (3 of 3); 100 forced stops under a connect storm aborted the
+  test process (3 of 3) → none left open.
+- U-4 TSan: `receivedReset`, `sentReset` and the resend range raced `disconnect()` from another
+  thread (11 of 15 cluster TSan seeds) → none (15 of 15).
+- U-4 Logout or Reject above a gap (#60): expected seqnum 3 and 4 → 2; echo-on runs lost 1–3
+  orders in 17 of 20 → LOST 0 locally (3 of 3).
+- Q15 resend under three flooding senders: 20,083 ms → 9 ms.
+- U-9 queue cap: no limit → at most 10,000 (`MaxQueuedMessages`), "Queue full" logged, all
+  delivered after the resend.
+- U-8 drained backlog (#61): 20,000 of 20,000 processed after the shutdown → 0.
+**Checks:** per PR: `krx_ut` (110 cases at #61), `ut` (53 cases, 1994 assertions), FIX.4.4
+acceptance 59/59 plain and threaded, `lint.sh .`; CI on #61's head (all 11 checks, both mutation
+gates at 80 % on the changed lines). Lab cluster rounds: `test/krx/BASELINE.md`.
+**Measured:** see BASELINE.md (chaos rounds per commit; echo seed 16 peak RSS 1.1 GB, mostly the
+harness's own records).
+**Decisions taken:** Q14 (fix the mutual-resend livelock), Q15 (bounded yield), Q16 (cap the
+queue, then `MaxQueuedMessages`), all the owner's. Without the owner: `krx_stress` sends only while
+logged on; each pod builds its own binary instead of an image in the lab registry; the stack was
+merged through #61 (it held every commit, so its CI covered all of it) and GitHub marked #58–#60
+merged; test-only fixes for CI flakes (`FreePorts`, skipping Linux self-connections, a one-byte
+probe before the stop check); the fork's `SessionState` setters moved to `Session.cpp` so Mull
+mutates the one copy the tests run; Q11 needed no change (no failing test).
+**Away from the spec:** none.
+**Left for the owner:** see "Long runs" below.
+
+**Long runs (added 14 Nov 2026; numbers in `test/krx/BASELINE.md`).** After #61 the long runs found
+two more defects, fixed test-first and merged: #64 (a restarted acceptor kept its old listening
+sockets; the TSan 1 h seed 7 race in `socket_close`) and #65 (a resend now reads its range 1000
+messages at a time, Q17). #63 and #70 are harness work (soak mode, the soak keeps each message's
+MsgSeqNum, `run.sh --disk`); #71 adds stateful session fuzzing (8.6's second half: a live session
+before logon, mid-resend and during logout, row 1.9).
+- 8.3: the final batch, 55 of 55 runs without echo with LOST = 0 (Release 20, ASan+UBSan 20, TSan
+  15).
+- 8.4: TSan 1 h × 10: 9 of 10 on `dab82397`; seed 7 failed on the race #64 fixed. Seed 7 rerun on
+  `cdb48561`: PASS, no TSan report (7,851,412 orders, LOST = 0, in step after 278 s).
+- 8.5: echo on at 1,000 orders/s, 20 of 20, no hang. Both 8 h Release soaks on `8f376fd8` (with
+  #64, #65) PASS: 54,029,648 orders without echo, 53,836,238 each way with echo; LOST = DUP = OOO
+  = 0; about 6,300 and 6,860 logons; 1,773 chaos stops and restarts, none over its limit; fds
+  58 → 63. RSS grows 64 B per stored message (3.6 and 7.1 GB at 8 h): FileStore's `std::map`
+  offsets index, by a heap profile; freed when the store resets. Accepted by the owner for 8.5 (14
+  Nov 2026); a smaller index is parked as 15.8. The first 8 h soak (on `dab82397`, before #64 and
+  #65) lost 61 orders across all sessions at one point and could not be traced (`--soak` did not
+  keep MsgSeqNums then); the rerun with the record kept lost none.
+- 8.6: libFuzzer over FixInput's five modes, 120 CPU-h, no crash (the exit leak check could not
+  run on one node's 3 pods). Stateful session fuzzing, 24 CPU-h, no crash, leak check clean.
+
+Open:
+- Echo-on chaos with **no send rate** (each sender as fast as it can, both sides resending at
+  once) still fails on the busiest node: 7 of 20 on `d7ec76ce` (the same engine as the rated
+  round), runs 0.2–1.6 M orders behind after 300 s and 2 initiator stops over their deadline (2
+  more on `e53f084d`). Not explained yet: overload of the node or an engine limit. The rated round
+  and the soaks hold, so it does not block Phase 8 as written; the owner decides whether to trace
+  it (with `--event-log` and stacks) before go-live.
 
 ### Handover 15 — 14 Nov 2026
 

@@ -282,3 +282,49 @@ folder. Earlier full runs overstated the score: once a mutant left a corrupt sto
 | `ut` | 454 | 218 | 51 % |
 
 Owner, 13 Nov 2026 (Q10): report only; the score may not drop between releases.
+
+## Chaos and long runs (Phase 8), lab Kubernetes cluster
+
+`krx_stress` (`src/C++/test/krx/Stress.cpp`) runs on the lab cluster (owner decision Q12): RKE2,
+3 × 16 CPU, namespace `krx-soak` with its own quota. `test/krx/k8s/run.sh start NAME VARIANT RUNS
+PARALLEL -- ARGS` starts one Indexed Job per suite and one pod per seed (seed = pod index + 1);
+each pod clones the commit and builds its variant (Release, ASan+UBSan, TSan). `run.sh results
+NAME` prints one line per seed. "N of M finished" counts only the runs that ended before
+the batch was replaced. A chaos run: 90 s, 4 sessions, 3 sender threads each, chaos steps
+every 150–500 ms; `--no-echo` (orders only) or echo on (the acceptor echoes every order: both sides
+resend at once after an outage). PASS means both sides in step after the settle, LOST = DUP = OOO =
+UNEXPECTED = 0, no canary file descriptor closed, and every stop within its limit (15 s; 60 s
+under a sanitizer).
+
+| Round (commit) | Release | Release, echo on | ASan+UBSan | TSan | Found → fixed |
+|---|---|---|---|---|---|
+| 1 (`ed96f5e5`, `f824dbca`) | 13 of 15 finished PASS | 14 of 18 finished PASS | 20 of 20 | 3 of 15 | TSan: two reading threads on one acceptor session, across acceptor stops (#59) |
+| 2 (`a7532eaa`) | 19 of 20 | 16 of 20 | 20 of 20 | 4 of 15 | TSan: `disconnect()` from another thread raced the reset flags and resend range (#59); OOM: the resend yield and the unbounded queue (Q15, Q16, #60) |
+| 3 (`8f1102f7`) | 20 of 20 | 3 of 20 | 18 of 20 finished PASS | 12 of 15 | 1–3 single orders lost per run with both sides in step: a Logout or Reject above a gap (#60) |
+| 4 (`6eae9940`) | 17 of 20 (3 without a result) | 18 of 20 | 20 of 20 | 15 of 15 | 2 initiator stops over 15 s: the backlog read while sending was processed after the shutdown (#61) |
+| 5 (`26f4e4c2`) | 20 of 20 | 13 of 20 | 15 of 20 (5 without a result) | 15 of 15 | echo on: 5 runs not back in step within 300 s (seeds 5, 11, 18, 19, 20; 0.2–0.8 M orders behind), 1 stop over 15 s (seed 17), on nodes short of CPU; seed 5 passed locally. Open |
+| final (`784e1b0c`; ASan on `e53f084d`) | 20 of 20 | 16 of 20 | 20 of 20 | 15 of 15 | 8.3's final batch: 55 runs without echo, LOST = 0 |
+| echo-on rounds (`e53f084d`; `d7ec76ce` with #64, #65) | | 7 of 20; 13 of 20 | | | no send rate: runs not back in step within 300 s (0.2–1.6 M orders behind) and initiator stops over their deadline (2 + 2 seeds), all on the busiest node; not explained yet |
+| echo-on at 1,000 orders/s (`bf66f21f`, same engine as `d7ec76ce`) | | 20 of 20 | | | no hang, all in step |
+
+Long runs (14 Nov 2026):
+
+| Run | Commit | Result |
+|---|---|---|
+| TSan stress 1 h × 10 seeds (8.4) | `dab82397` | 9 of 10; seed 7: a data race in `socket_close` (an acceptor restarted while a connection closed a socket it had listened on), fixed in #64; seed 7 rerun on `cdb48561`: PASS, no report (7.85 M orders, LOST = 0) |
+| Release soak 8 h, no echo (8.5) | `8f376fd8` | PASS: 54,029,648 orders, LOST = DUP = OOO = 0, about 6,300 logons, 895 chaos stops and restarts; fds 58 → 63; RSS 42 MB → 3.6 GB |
+| Release soak 8 h, echo on (8.5) | `8f376fd8` | PASS: 53,836,238 orders and as many echoes, LOST = DUP = OOO = 0 both ways, about 6,860 logons, 878 chaos stops and restarts; fds 58 → 63; RSS 48 MB → 7.1 GB |
+| libFuzzer, FixInput's five modes, 10 × 12 h (8.6) | `75a42540` | no crash in 120 CPU-h (about 1.1 billion inputs); the exit leak check could not run on one node (3 pods: "LeakSanitizer does not work under ptrace") |
+| Stateful session fuzzing, 4 × 6 h (8.6) | `4971c962` | no crash, leak check clean: 35.7 M inputs, coverage 5,544 → 6,186 edges, RSS flat at about 500 MB |
+
+The soaks' memory is FileStore's offsets index: one 64-byte `std::map` node per stored message
+(a heap profile of a local soak: the only allocations that grew, all from `FileStore::set`), plus
+the harness's 4 bytes a message, 68 B against 67 B measured. Freed when the store resets (daily);
+the owner accepted it for 8.5 (14 Nov 2026), a smaller index is parked as plan item 15.8.
+
+Also on the research's engine (`25273cc3`, today's harness, ASan): 0 of 10, each stopped first on a
+memory error fixed in Phases 2–6, so the research's gap itself was not seen again.
+
+Local numbers (Release, Apple Silicon Mac): a resend of 2000 messages while three senders flood
+the session took 20,083 ms before Q15 and 9 ms after. Echo-on seed 16 after Q15 and Q16: PASS,
+2.14 M orders each way, peak RSS 1.1 GB (mostly the harness's own per-message records).
