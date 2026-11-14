@@ -122,11 +122,12 @@ public:
   bool endBatch() override;
 
 protected:
-  // KRX fork (P0-5, 15.6): forces the file open as `fd` to disk; true once it is there.
+  // KRX fork (P0-5): forces the file open as `fd` to disk; true once it is there.
   virtual bool syncFile( int fd );
-  // KRX fork (15.6): ends the background flush, after a last flush of what is not on disk yet. A
-  // subclass that overrides syncFile calls it in its own destructor.
-  void stopFlusher();
+  // KRX fork (15.6): how the background flush syncs a descriptor (default: to disk). A plain
+  // function, not syncFile, so the flusher never calls into a subclass that is being destroyed.
+  // Set it before the first write.
+  void setFlushSync( bool ( *sync )( int fd ) );
 
 private:
 #ifdef _MSC_VER
@@ -179,13 +180,14 @@ private:
   // flusher syncs copies of the body and seqnums descriptors (taken under m_flushMutex, which
   // open() and rollBack() hold while they swap the files), so a write never waits for a sync. A
   // failed flush is kept and fails the next set(). The thread starts with the first write after
-  // construction, so it never calls a subclass's syncFile before that subclass exists.
+  // construction.
   void markUnflushed();
   void flushLoop();
-  bool flushOnce( bool viaOverride );
-  bool syncCopy( int fd, bool viaOverride );
-  void endFlusher( bool viaOverride );
+  bool flushOnce();
+  bool syncCopy( int fd );
+  void endFlusher();
   int m_flushIntervalMs = 0;
+  bool ( *m_flushSync )( int fd ) = nullptr; // set in the constructor (syncDescriptor)
   bool m_constructed = false;
   std::thread m_flusher;
   std::mutex m_flushMutex;
