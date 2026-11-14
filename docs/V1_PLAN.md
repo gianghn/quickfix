@@ -110,7 +110,7 @@ The owner may change any of these before its phase starts.
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | built on `agent/v1-p15a` (not yet merged): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 open (Handover 15) |
+| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | done (#66, #67, #68): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 dropped (Handover 15) |
 
 ### Next steps (13 Nov 2026)
 
@@ -312,7 +312,7 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   one `pwrite` at 0 (no `rewind`/`fprintf`/`fflush`), `get` reads with `pread`. A failed write still
   rolls both files back (P0-4); Windows keeps the stdio path. Measured before and after (file and
   sync, three interleaved runs, medians) into `test/krx/BASELINE.md`.
-- 15.2 [2] No seqnums write for a sent message the body already records: skipped when the next
+- 15.2 [2] **Dropped (owner, 14 Nov 2026)**: a small gain only in file mode, not worth the admin-reset risk. No seqnums write for a sent message the body already records: skipped when the next
   sender seqnum is the last stored message + 1; target changes are still written. On open the next
   sender seqnum is the larger of the seqnums file and the last header record + 1. Risk: a sender
   seqnum set lower on purpose (an admin reset) looks like a stale file; proposal: lowering also
@@ -639,8 +639,8 @@ need no change.
 - This decision was Q17 until 14 Nov 2026; renumbered Q18 (owner) because open PR #65
   (`agent/v1-p8i`) took Q17 for the resend range. `docs/V1_PLAN.md` conflicts with #62 and #65:
   whichever merges second resolves it (both add rows to Decisions, Progress and Handover notes).
-- 15.2 (skip the seqnums write the body already records): still open; small gain in file mode, some
-  risk around admin resets; proposal: drop it.
+- 15.2 (skip the seqnums write the body already records): dropped (owner, 14 Nov 2026); small gain
+  in file mode, some risk around admin resets.
 - 11.7 on the production disk (likely XFS): sync cost and flush cost decide the batch cap and
   interval.
 - Production uses background flush: Phases 9–10 need only the `FileStoreFlushInterval` setting
