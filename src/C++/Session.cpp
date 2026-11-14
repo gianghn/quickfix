@@ -1734,8 +1734,7 @@ EXCEPT ( SessionNotFound )
 {
   Session* pSession = lookupSession( sessionID );
   if ( !pSession ) throw SessionNotFound();
-  for ( Message& message : messages ) message.setSessionID( sessionID );
-  return pSession->send( messages );
+  return pSession->send( messages ); // send fills each header from the session (Session::fill)
 }
 
 bool Session::sendToTarget
