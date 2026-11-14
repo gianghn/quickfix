@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -413,6 +414,26 @@ SCENARIO("When the connection fails mid-batch, the result says which orders went
       THEN("some but not all went out, and the exchange got exactly those, in order") {
         INFO("sent " << sent << ", orders read " << read.size());
         REQUIRE((sent > 0 && sent < 5000 && Consecutive(read, 2, sent)));
+      }
+    }
+  }
+}
+
+SCENARIO("Seqnums at the edges of the format are written as printf's \"%10.10d\" writes them",
+         "[krx][v1][p15]") {
+  GIVEN("a file store") {
+    const krx::TempDir dir("store153edge");
+    FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+    WHEN("the seqnums are set to 0 and -5, then to the largest and smallest int") {
+      store.setNextSenderMsgSeqNum(0);
+      store.setNextTargetMsgSeqNum(-5);
+      const std::string small = Contents(StoreFile(dir, "seqnums"));
+      store.setNextSenderMsgSeqNum(std::numeric_limits<int>::max());
+      store.setNextTargetMsgSeqNum(std::numeric_limits<int>::min());
+      const std::string limits = Contents(StoreFile(dir, "seqnums"));
+      THEN("the file reads \"0000000000 : -0000000005\", then \"2147483647 : -2147483648\"") {
+        INFO("small: '" << small << "', limits: '" << limits << "'");
+        REQUIRE((small == "0000000000 : -0000000005" && limits == "2147483647 : -2147483648"));
       }
     }
   }
