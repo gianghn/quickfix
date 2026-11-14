@@ -610,6 +610,11 @@ out, none after); a refused message ends the batch there; the batch's wire text 
 written, not when stored; a failed flush fails the next `set()`, not the session at once (the store
 cannot reach the session); `MessageStore::beginBatch`/`endBatch` default to nothing, so other
 stores (and quickfix-rs's) need no change.
-**Left for the owner:** push and PRs (none opened yet); pre-sizing the body file (`fallocate`) to
-avoid the ext4 journal stalls with background flush, as a follow-up item if 11.7 shows them on the
-production disk (XFS); delete namespace `krx-bench` when done.
+**Left for the owner:** push and PRs (none opened yet); delete namespace `krx-bench` when done.
+
+**Update 14 Nov 2026 (pre-size spike, not built):** pre-sizing the body and header files was
+measured before planning a 15.8 (spike branch `spike/v1-p15-presize`; `test/krx/BASELINE.md`). It
+does not pay: `fallocate` is within the noise on node2 and node3, zero-filling is 30–37 % slower even
+with the flush off, and the 5 ms flush itself cost 0 % (node2) and 4.5 % (node3) in these runs, so
+the earlier −25 % was the busy node, not ext4. Not built; to look at again only if 11.7 shows flush
+stalls on the production disk.

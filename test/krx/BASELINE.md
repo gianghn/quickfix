@@ -224,6 +224,30 @@ grows the file can wait for that commit. Pre-sizing the body file (`fallocate`) 
 appends from changing the file's size; XFS (Rocky 9's default) may behave differently. To check
 on the production disk (11.7).
 
+Pre-size spike (14 Nov 2026, `spike/v1-p15-presize` 0aab7f55, not for merge): `open()` pre-sizes the
+body and header files by 256 MB (the runs fill about 17 MB) with `posix_fallocate` or by writing
+zeros, then syncs. File mode, 100,000 orders and 5,000 round trips, 5 interleaved rounds, medians;
+ext4 on LVM (consumer NVMe).
+
+| Node (CPU busy) | Flush | Pre-size | msg/s | RTT p50 µs | p99 µs | p99.9 µs |
+|---|---|---|---|---|---|---|
+| node2 (18 %) | off | none | 242,636 | 30.7 | 84.7 | 445 |
+| node2 | off | fallocate | 248,320 | 28.6 | 132.4 | 697 |
+| node2 | off | zeros | 157,298 | 34.7 | 131.4 | 617 |
+| node2 | 5 ms | none | 251,515 | 29.0 | 90.4 | 525 |
+| node2 | 5 ms | fallocate | 223,667 | 30.5 | 121.7 | 624 |
+| node2 | 5 ms | zeros | 150,611 | 29.7 | 202.0 | 632 |
+| node3 (35 %) | off | none | 165,587 | 25.8 | 71.4 | 609 |
+| node3 | off | fallocate | 166,318 | 25.9 | 101.0 | 625 |
+| node3 | off | zeros | 118,113 | 33.8 | 240.5 | 626 |
+| node3 | 5 ms | none | 158,171 | 27.1 | 149.8 | 690 |
+| node3 | 5 ms | fallocate | 161,743 | 26.6 | 96.8 | 640 |
+| node3 | 5 ms | zeros | 116,937 | 34.1 | 339.0 | 655 |
+
+The 5 ms flush cost 0 % (node2) and 4.5 % (node3) here, with no 3 ms p99 in 30 runs; the −25 %
+above came with three soak jobs on node3. `fallocate` is within the noise either way; writing over
+zero-filled blocks is 30–37 % slower than appending, flush or not. Not built.
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4
