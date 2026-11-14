@@ -163,6 +163,36 @@ Step timers at 64: the sync per batch 721 µs, the socket writes 143 µs (2.2 µ
 writes about 3 µs an order. Throughput is batch ÷ (sync + about 5 µs × batch): 90 % of the ideal
 at 4, 57 % at 64.
 
+Background flush (15.6 spike, 14 Nov 2026: store sync off, a thread `fdatasync`s body and seqnums
+every `KRX_FLUSH_MS`; the loss window is the age of the oldest unflushed write when its flush
+ends), file mode, 100,000 orders and 5,000 round trips, the same Rocky pod, 3 interleaved runs,
+medians:
+
+| Flush every | msg/s | `send()` µs | RTT p50 µs | loss window p50 / p99 / max ms | flush p50 ms |
+|---|---|---|---|---|---|
+| never (file mode) | 230,887 | 3.45 | 27.0 | up to the kernel's ~30 s | — |
+| 1 ms | 216,243 | — | 27.6 | 3.3 / 4.8 / 5.3 | 1.1 |
+| 5 ms | 245,157 | 3.54 | 32.3 | 7.7 / 9.2 / 9.4 | 1.3 |
+| 10 ms | 225,285 | — | 31.6 | 13.3 / 14.8 / 18.5 | 1.6 |
+
+The send path does not notice the flusher (within the run-to-run noise). A flush is two
+`fdatasync`s (body, seqnums), so the window is about the interval plus up to two flushes; the
+spike sleeps a full interval after each flush, which the build should not (sleep to the next tick).
+
+15.6 as built (14 Nov 2026), the same Rocky pod: before = 15.1 (90665b83, no flusher), after =
+26c79293, file mode, 100,000 orders and 5,000 round trips, 3 interleaved rounds (the before build ran
+twice a round), medians:
+
+| Build | msg/s | RTT p50 µs | p99.9 µs |
+|---|---|---|---|
+| before (6 runs) | 259,776 | 26.4 | 346 |
+| after, `FileStoreFlushInterval=0` | 277,588 | 30.2 | 308 |
+| after, `FileStoreFlushInterval=5` | 244,442 | 31.3 | 236 |
+
+Throughput and p99.9 hold. The p50 median is 15 % higher, over D9's 10 % on paper, but single runs
+of one build range 22–32 µs and with the flush off the send path only gains an atomic check; to
+measure again with more runs before 15.6 merges.
+
 ## Red list (rows that failed before their fix)
 
 Each fix-phase row was red on `25273cc3`; the red output is in its PR: rows 1.1–1.2 (#4), 1.4

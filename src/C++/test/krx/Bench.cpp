@@ -4,8 +4,9 @@
 //   ping-pong:  the acceptor echoes each order; round trip from the steady-clock nanoseconds the
 //               order carries in Text(58). Prints p50/p99/p99.9/max.
 // Usage: krx_bench [mem|file|sync] [orders=200000] [round_trips=20000] [port=7800] [workdir]
-//                  [senders=1]
+//                  [senders=1] [flush_ms=0]
 //   senders: threads sending the throughput orders on the one session at once (plan item 15.4).
+//   flush_ms: FileStoreFlushInterval, the background flush of a file store without sync (15.6).
 //   sync: the file store with FileStoreSync=Y (plan item 4.4).
 // Numbers from a shared machine are rough; compare runs on the same machine only.
 #include <algorithm>
@@ -102,6 +103,7 @@ struct Options {
   int port = 7800;
   std::filesystem::path workdir = "bench_work";
   int senders = 1;
+  int flush_ms = 0;
 };
 
 Options Parse(std::span<char*> args) {
@@ -126,6 +128,9 @@ Options Parse(std::span<char*> args) {
   if (args.size() > 6) {
     options.senders = std::max(1, std::stoi(args[6]));
   }
+  if (args.size() > 7) {
+    options.flush_ms = std::max(0, std::stoi(args[7]));
+  }
   return options;
 }
 
@@ -137,6 +142,7 @@ FIX::SessionSettings Settings(const Options& options, bool acceptor) {
        << "\nSocketReuseAddress=Y\nSocketNodelay=Y\nHeartBtInt=30\nReconnectInterval=1\n"
        << "StartTime=00:00:00\nEndTime=00:00:00\nFileStorePath="
        << (options.workdir / side).string() << "\nFileStoreSync=" << (options.sync ? "Y" : "N")
+       << "\nFileStoreFlushInterval=" << options.flush_ms
        << "\nUseDataDictionary=Y\nDataDictionary=" << KRX_SPEC_DIR
        << "/FIX44.xml\n[SESSION]\nBeginString=FIX.4.4\nSenderCompID=" << (acceptor ? "SRV" : "CLI")
        << "\nTargetCompID=" << (acceptor ? "CLI" : "SRV") << "\n";
@@ -256,8 +262,8 @@ int Run(std::span<char*> args) {
   if (options.sync) {
     store = "file+sync";
   }
-  std::cout << std::format("store={} senders={} hw_threads={}\n", store, options.senders,
-                           std::thread::hardware_concurrency());
+  std::cout << std::format("store={} senders={} flush_ms={} hw_threads={}\n", store,
+                           options.senders, options.flush_ms, std::thread::hardware_concurrency());
   const FIX::SessionID id("FIX.4.4", "CLI", "SRV");
   for (std::int64_t number = 0; number < kWarmup; ++number) {
     Send(number, id);

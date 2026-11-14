@@ -176,9 +176,9 @@ rows 15.12–15.17 are for its choice, 15.6 and 15.7.
 | [–] 15.9 | With decoupled sync, messages reach the exchange in seqnum order — not built: Q18 | 15.3 |
 | [–] 15.10 | With shared sync and several senders on one session, each `send()` returns only once its message is on disk and written, with fewer syncs than messages — not built: Q18 | 15.4 |
 | [–] 15.11 | With shared sync, a failed sync fails every waiting sender and disconnects the session once — not built: Q18 | 15.4 |
-| [ ] 15.12 | Without store sync, every message stored more than one flush interval ago is on disk, while the session keeps sending | 15.6 |
-| [ ] 15.13 | Without store sync, a flush that fails disconnects the session with an error logged | 15.6 |
-| [ ] 15.14 | Stopping a session with background flush running ends its flusher, and nothing it stored is left unflushed | 15.6 |
+| [ ] 15.12 | With `FileStoreFlushInterval` set and store sync off, a stored message is flushed to disk soon after, and an idle store flushes nothing | 15.6 |
+| [ ] 15.13 | After a background flush fails, the next store write fails with the flush's error, so the session fails closed as for a failed write (row 4.3) | 15.6 |
+| [ ] 15.14 | A store destroyed or reset while its flusher runs stops it promptly and safely (TSan), and opens again with every message it kept | 15.6 |
 | [ ] 15.15 | With store sync, a batch of orders costs one sync and reaches the exchange whole and in order | 15.7 |
 | [ ] 15.16 | With store sync, no order of a batch reaches the exchange before the batch is on disk, and a failed sync sends none of them and disconnects | 15.7 |
 | [ ] 15.17 | When the connection fails in the middle of a batch, the result says which orders went out | 15.7 |

@@ -2,13 +2,19 @@
 // Rows 15.1-15.3 (item 15.1) guard a change that must not change behaviour: messages written at
 // offsets the store keeps in memory read back whole, also right after they are written and after a
 // failed write, and the seqnums file keeps its format.
+// Rows 15.12-15.14 (item 15.6, Q18): with store sync off, FileStoreFlushInterval makes a background
+// thread flush the store to disk; a failed flush fails the next write; destroying or resetting the
+// store stops the thread safely.
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <catch_amalgamated.hpp>
@@ -17,9 +23,17 @@
 #include "FaultyFile.h"
 #include "FileStore.h"
 #include "SessionID.h"
+#include "SessionSettings.h"
 #include "Utility.h"
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+using std::chrono::milliseconds;
+
+constexpr int kFlushMs = 5;
+// Generous: sanitized CI runs are slow. The thread itself waits one interval.
+constexpr milliseconds kFlushedWithin{500};
 
 FIX::SessionID StoreSession() {
   return {"FIX.4.4", "KRXGW", "KRXEX"};
@@ -72,6 +86,48 @@ int StoreWhileReading(const krx::TempDir& dir, int count) {
   }
   store.setNextTargetMsgSeqNum(57);
   return 0;
+}
+
+// How many times `store` (a FileStore) has forced a file to disk.
+std::uint64_t SyncsOf(const FIX::MessageStore* store) {
+  const auto* file_store = dynamic_cast<const FIX::FileStore*>(store);
+  return file_store == nullptr ? 0 : file_store->getSyncCount();
+}
+
+// Waits up to kFlushedWithin for `store` to have synced at least once; then lets the flush that
+// was running end (three intervals) so the count is settled. True when it synced.
+bool FlushedSoon(const FIX::MessageStore* store) {
+  const auto start = Clock::now();
+  while (SyncsOf(store) == 0 && Clock::now() - start < kFlushedWithin) {
+    std::this_thread::sleep_for(milliseconds(1));
+  }
+  std::this_thread::sleep_for(milliseconds(3 * kFlushMs));
+  return SyncsOf(store) > 0;
+}
+
+// A store whose every background flush fails, as a disk that returns EIO would (row 15.13).
+class FailingFlushStore : public FIX::FileStore {
+ public:
+  explicit FailingFlushStore(const krx::TempDir& dir)
+      : FIX::FileStore(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), false,
+                       kFlushMs) {
+    setFlushSync([](int /*fd*/) { return false; });
+  }
+};
+
+// Stores messages from `first` on in `store` until one write throws or kFlushedWithin passes. The
+// error's text, or "" when every write worked.
+std::string FirstWriteError(FIX::FileStore& store, int first) {
+  const auto start = Clock::now();
+  for (int seq = first; Clock::now() - start < kFlushedWithin; ++seq) {
+    try {
+      store.set(seq, Message(seq));
+    } catch (const FIX::IOException& e) {
+      return e.what();
+    }
+    std::this_thread::sleep_for(milliseconds(1));
+  }
+  return "";
 }
 
 std::string Contents(const std::filesystem::path& path) {
@@ -153,6 +209,95 @@ SCENARIO("After every update the seqnums file holds the last seqnums in its exis
       THEN("the file reads \"0000012345 : 0000000067\", then \"0000000005 : 0000000068\"") {
         INFO("raised: '" << raised << "', lowered: '" << lowered << "'");
         REQUIRE((raised == "0000012345 : 0000000067" && lowered == "0000000005 : 0000000068"));
+      }
+    }
+  }
+}
+
+SCENARIO("With a flush interval and store sync off, a stored message is flushed soon after",
+         "[krx][v1][p15][flush]") {
+  GIVEN("session settings with FileStoreSync=N and FileStoreFlushInterval=5") {
+    const krx::TempDir dir("store1512");
+    std::istringstream text(
+        "[DEFAULT]\nConnectionType=acceptor\nFileStorePath=" + dir.Path().string() +
+        "\nFileStoreSync=N\nFileStoreFlushInterval=5\n[SESSION]\nBeginString=FIX.4.4\n"
+        "SenderCompID=KRXGW\nTargetCompID=KRXEX\n");
+    const FIX::SessionSettings settings(text);
+    FIX::FileStoreFactory factory(settings);
+    WHEN("the factory's store keeps a message, then nothing more for ten intervals") {
+      FIX::MessageStore* store = factory.create(FIX::UtcTimeStamp::now(), StoreSession());
+      store->set(1, Message(1));
+      store->incrNextSenderMsgSeqNum();
+      const bool flushed = FlushedSoon(store);
+      const std::uint64_t settled = SyncsOf(store);
+      std::this_thread::sleep_for(milliseconds(10 * kFlushMs));
+      const std::uint64_t idle = SyncsOf(store);
+      factory.destroy(store);
+      THEN("it was flushed to disk, and the idle store flushed nothing more") {
+        INFO("syncs once flushed: " << settled << ", after idling: " << idle);
+        REQUIRE((flushed && idle == settled));
+      }
+    }
+  }
+}
+
+SCENARIO("After a background flush fails, the next store write fails with the flush's error",
+         "[krx][v1][p15][flush]") {
+  GIVEN("a store with a flush interval whose syncs fail") {
+    const krx::TempDir dir("store1513");
+    FailingFlushStore store(dir);
+    WHEN("it keeps storing messages") {
+      const std::string error = FirstWriteError(store, 1);
+      THEN("a write soon fails, and its error names the failed flush") {
+        INFO("error: '" << error << "'");
+        REQUIRE(error.contains("flush"));
+      }
+    }
+  }
+}
+
+SCENARIO("A store destroyed or reset while its flusher runs opens again with what it kept",
+         "[krx][v1][p15][flush]") {
+  GIVEN("a store flushing every millisecond") {
+    const krx::TempDir dir("store1514");
+    auto store = std::make_unique<FIX::FileStore>(FIX::UtcTimeStamp::now(), dir.Path().string(),
+                                                  StoreSession(), false, 1);
+    WHEN("it keeps 200 messages, is reset, keeps 100 new ones, and is destroyed at once") {
+      for (int seq = 1; seq <= 200; ++seq) {
+        store->set(seq, Message(seq));
+      }
+      store->reset(FIX::UtcTimeStamp::now());
+      for (int seq = 1; seq <= 100; ++seq) {
+        store->set(seq, Message(seq));
+      }
+      const auto start = Clock::now();
+      store.reset();
+      const auto took = std::chrono::duration_cast<milliseconds>(Clock::now() - start);
+      const FIX::FileStore reopened(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+      THEN("destroying it was prompt, and the store opens again with the 100 new messages") {
+        const int wrong = FirstWrong(reopened, 1, 100);
+        INFO("destroy took " << took.count() << " ms; first wrong: " << wrong);
+        REQUIRE((took < kFlushedWithin && wrong == 0 && Read(reopened, 101) == "<missing>"));
+      }
+    }
+  }
+}
+
+SCENARIO("A store with a long flush interval stops its flusher at once when destroyed",
+         "[krx][v1][p15][flush]") {
+  GIVEN("a store flushing every 5 seconds, its flusher started by a write and now waiting") {
+    const krx::TempDir dir("store1514long");
+    auto store = std::make_unique<FIX::FileStore>(FIX::UtcTimeStamp::now(), dir.Path().string(),
+                                                  StoreSession(), false, 5000);
+    store->set(1, Message(1));
+    std::this_thread::sleep_for(milliseconds(100));
+    WHEN("it is destroyed") {
+      const auto start = Clock::now();
+      store.reset();
+      const auto took = std::chrono::duration_cast<milliseconds>(Clock::now() - start);
+      THEN("destroying it did not wait for the next flush") {
+        INFO("destroy took " << took.count() << " ms");
+        REQUIRE((took < kFlushedWithin));
       }
     }
   }
