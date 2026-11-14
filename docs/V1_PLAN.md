@@ -626,7 +626,7 @@ before logon, mid-resend and during logout, row 1.9).
 - 8.3: the final batch, 55 of 55 runs without echo with LOST = 0 (Release 20, ASan+UBSan 20, TSan
   15).
 - 8.4: TSan 1 h × 10: 9 of 10 on `dab82397`; seed 7 failed on the race #64 fixed. Seed 7 rerun on
-  `cdb48561`: *running when this was written*.
+  `cdb48561`: PASS, no TSan report (7,851,412 orders, LOST = 0, in step after 278 s).
 - 8.5: echo on at 1,000 orders/s, 20 of 20, no hang. Both 8 h Release soaks on `8f376fd8` (with
   #64, #65) PASS: 54,029,648 orders without echo, 53,836,238 each way with echo; LOST = DUP = OOO
   = 0; about 6,300 and 6,860 logons; 1,773 chaos stops and restarts, none over its limit; fds
@@ -645,7 +645,6 @@ Open:
   more on `e53f084d`). Not explained yet: overload of the node or an engine limit. The rated round
   and the soaks hold, so it does not block Phase 8 as written; the owner decides whether to trace
   it (with `--event-log` and stacks) before go-live.
-- U-5 waits for seed 7's rerun.
 
 ### Handover 15 — 14 Nov 2026
 

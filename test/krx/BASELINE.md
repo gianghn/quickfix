@@ -311,7 +311,7 @@ Long runs (14 Nov 2026):
 
 | Run | Commit | Result |
 |---|---|---|
-| TSan stress 1 h × 10 seeds (8.4) | `dab82397` | 9 of 10; seed 7: a data race in `socket_close` (an acceptor restarted while a connection closed a socket it had listened on), fixed in #64; seed 7 rerun on `cdb48561`: see Handover 8 |
+| TSan stress 1 h × 10 seeds (8.4) | `dab82397` | 9 of 10; seed 7: a data race in `socket_close` (an acceptor restarted while a connection closed a socket it had listened on), fixed in #64; seed 7 rerun on `cdb48561`: PASS, no report (7.85 M orders, LOST = 0) |
 | Release soak 8 h, no echo (8.5) | `8f376fd8` | PASS: 54,029,648 orders, LOST = DUP = OOO = 0, about 6,300 logons, 895 chaos stops and restarts; fds 58 → 63; RSS 42 MB → 3.6 GB |
 | Release soak 8 h, echo on (8.5) | `8f376fd8` | PASS: 53,836,238 orders and as many echoes, LOST = DUP = OOO = 0 both ways, about 6,860 logons, 878 chaos stops and restarts; fds 58 → 63; RSS 48 MB → 7.1 GB |
 | libFuzzer, FixInput's five modes, 10 × 12 h (8.6) | `75a42540` | no crash in 120 CPU-h (about 1.1 billion inputs); the exit leak check could not run on one node (3 pods: "LeakSanitizer does not work under ptrace") |
