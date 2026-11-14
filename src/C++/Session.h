@@ -90,6 +90,9 @@ public:
   EXCEPT ( SessionNotFound );
   static bool sendToTarget( Message& message, const SessionID& sessionID )
   EXCEPT ( SessionNotFound );
+  // KRX fork (15.7, Q18): `messages` as one batch on that session; see send( std::vector<Message>& ).
+  static std::size_t sendToTarget( std::vector<Message>& messages, const SessionID& sessionID )
+  EXCEPT ( SessionNotFound );
   static bool sendToTarget( Message&,
                             const SenderCompID& senderCompID,
                             const TargetCompID& targetCompID,
@@ -263,6 +266,11 @@ public:
   }
 
   bool send( Message& );
+  // KRX fork (15.7, Q18): sends `messages` as one batch: each stored under one hold of the session
+  // lock (with FileStoreSync, one sync for the batch), then written in order. How many went out,
+  // counting from the first: the rest were refused, not written, or the session disconnected (a
+  // failed store or sync sends none and disconnects, D7).
+  std::size_t send( std::vector<Message>& messages );
   void next( const UtcTimeStamp& now );
   void next( const std::string&, const UtcTimeStamp& now, bool queued = false );
   void next( const Message&, const UtcTimeStamp& now, bool queued = false );
@@ -400,6 +408,9 @@ private:
   // KRX fork (P0-3): guards m_pResponder's changes, so disconnect() can shut the connection down
   // without m_mutex, which a sender stuck in send holds.
   Mutex m_responderMutex;
+  // KRX fork (15.7): while a batch is being stored, send( const std::string& ) collects the wire text
+  // here instead of writing it. Guarded by m_mutex.
+  std::vector<std::string>* m_batch = nullptr;
 
   static Sessions s_sessions;
   static SessionIDs s_sessionIDs;

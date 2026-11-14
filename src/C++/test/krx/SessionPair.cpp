@@ -61,7 +61,8 @@ FIX::TimeRange AllDay() {
 }  // namespace
 
 SessionPair::SessionPair(const std::string& counterparty, const PairOptions& options)
-    : store_(options.file_store_dir, options.file_store_sync, options.seqnum_fails),
+    : store_(options.file_store_dir, options.file_store_sync, options.seqnum_fails,
+             options.sync_fails),
       id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
       session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_,
                Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_) {
