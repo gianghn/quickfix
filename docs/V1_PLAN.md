@@ -574,7 +574,10 @@ pushed, no PR yet. Numbers: `test/krx/BASELINE.md`; rows: `docs/V1_BDD_CHECKLIST
   `flushIntervalMs = 0`. One flusher thread per store, started on the first write, `fdatasync`s
   body and seqnums on a fixed tick when anything was written (it syncs `dup`ed descriptors taken
   under `m_flushMutex`, so a write never waits for a sync). A failed flush makes the next `set()`
-  throw, so the send fails closed (D7). Protected `virtual bool syncFile(int fd)` is the test seam.
+  throw, so the send fails closed (D7). The flusher syncs through the protected `setFlushSync`
+  (a plain function, default `fdatasync`; the tests' failing-disk seam), never the virtual
+  `syncFile`, so it cannot call into a subclass being destroyed. `syncFile` stays the seam for the
+  sync-mode writes (15.7's `SyncFailingFileStore`).
 - 15.7 (e3374ac0) batch send for `FileStoreSync=Y`: `std::size_t Session::send( std::vector<Message>& )`
   and static `Session::sendToTarget( std::vector<Message>&, const SessionID& )`. Under one hold of
   the session lock: `store->beginBatch()`, each message stored without a sync, `endBatch()` syncs
