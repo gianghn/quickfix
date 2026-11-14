@@ -196,6 +196,10 @@ void ThreadedSocketAcceptor::onStop()
     threads = m_threads;
     m_threads.clear();
     closedThreads.swap( m_closedThreads );
+    // KRX fork (U-8, 8.4): these numbers are closed now and may be reused. Kept, the next start
+    // accepted on them and the next stop closed a connection given one of them under its thread.
+    m_sockets.clear();
+    m_socketToPort.clear();
   }
 
   for ( i = threads.begin(); i != threads.end(); ++i )
