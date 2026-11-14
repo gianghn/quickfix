@@ -621,10 +621,11 @@ need no change.
 **Away from the spec:** 15.7 is an overload `sendToTarget(vector, id)` returning a count, not
 `sendToTargetBatch` with a per-message result. 15.6 is off by default, not 5 ms: opt-in per D8.
 **Left for the owner:**
-- PRs: one per item (15.1, 15.6, 15.7) against `krx/main`.
-- Q18 clash: open PR #65 (`agent/v1-p8i`) adds its own Q18 (resend range). This branch's Q18 (store
-  throughput) is referenced in code comments and the fork notes; one of the two needs renumbering.
-  `docs/V1_PLAN.md` also conflicts with #62 and #65.
+- Merge the three stacked PRs in order: `agent/v1-p15a` (15.1 and the plan), `agent/v1-p15b`
+  (15.6), `agent/v1-p15c` (15.7 and the measurements).
+- This decision was Q17 until 14 Nov 2026; renumbered Q18 (owner) because open PR #65
+  (`agent/v1-p8i`) took Q17 for the resend range. `docs/V1_PLAN.md` conflicts with #62 and #65:
+  whichever merges second resolves it (both add rows to Decisions, Progress and Handover notes).
 - 15.2 (skip the seqnums write the body already records): still open; small gain in file mode, some
   risk around admin resets; proposal: drop it.
 - 11.7 on the production disk (likely XFS): sync cost and flush cost decide the batch cap and
