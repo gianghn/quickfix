@@ -501,16 +501,21 @@ bool FileStore::flushOnce( bool viaOverride )
       seqNums = dup( fileno( m_seqNumsFile ) );
     }
   }
-  const auto synced = [this, viaOverride]( int fd ) {
-    return fd >= 0 && ( viaOverride ? syncFile( fd ) : syncDescriptor( fd ) );
-  };
-  const bool bodySynced = synced( body );
-  const bool seqNumsSynced = synced( seqNums );
-  if ( body >= 0 ) close( body );
-  if ( seqNums >= 0 ) close( seqNums );
+  const bool bodySynced = syncCopy( body, viaOverride );
+  const bool seqNumsSynced = syncCopy( seqNums, viaOverride );
   if ( bodySynced ) ++m_syncCount;
   if ( seqNumsSynced ) ++m_syncCount;
   return bodySynced && seqNumsSynced;
+}
+
+// KRX fork (15.6): syncs and closes a descriptor copy from flushOnce. -1 (the files were closed, or
+// dup failed; dup returns exactly -1 then) is a failed sync, so the flush fails closed.
+bool FileStore::syncCopy( int fd, bool viaOverride )
+{
+  if ( fd == -1 ) return false;
+  const bool synced = viaOverride ? syncFile( fd ) : syncDescriptor( fd );
+  close( fd );
+  return synced;
 }
 
 void FileStore::stopFlusher()
