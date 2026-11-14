@@ -419,6 +419,26 @@ SCENARIO("When the connection fails mid-batch, the result says which orders went
   }
 }
 
+SCENARIO("A store with a long flush interval stops its flusher at once when destroyed",
+         "[krx][v1][p15][flush]") {
+  GIVEN("a store flushing every 5 seconds, its flusher started by a write and now waiting") {
+    const krx::TempDir dir("store1514long");
+    auto store = std::make_unique<FIX::FileStore>(FIX::UtcTimeStamp::now(), dir.Path().string(),
+                                                  StoreSession(), false, 5000);
+    store->set(1, Message(1));
+    std::this_thread::sleep_for(milliseconds(100));
+    WHEN("it is destroyed") {
+      const auto start = Clock::now();
+      store.reset();
+      const auto took = std::chrono::duration_cast<milliseconds>(Clock::now() - start);
+      THEN("destroying it did not wait for the next flush") {
+        INFO("destroy took " << took.count() << " ms");
+        REQUIRE((took < kFlushedWithin));
+      }
+    }
+  }
+}
+
 SCENARIO("Seqnums at the edges of the format are written as printf's \"%10.10d\" writes them",
          "[krx][v1][p15]") {
   GIVEN("a file store") {

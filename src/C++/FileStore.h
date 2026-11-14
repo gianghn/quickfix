@@ -183,6 +183,7 @@ private:
   void markUnflushed();
   void flushLoop();
   bool flushOnce( bool viaOverride );
+  bool syncCopy( int fd, bool viaOverride );
   void endFlusher( bool viaOverride );
   int m_flushIntervalMs = 0;
   bool m_constructed = false;

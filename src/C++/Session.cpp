@@ -41,6 +41,30 @@ Mutex Session::s_mutex;
 #define LOGEX( method ) try { method; } catch( std::exception& e ) \
   { m_state.onEvent( e.what() ); }
 
+// KRX fork (U-4, U-9): SessionState's own setters, here so there is one copy (SessionState.h).
+void SessionState::receivedReset( bool value ) { m_receivedReset.store( value ); }
+
+void SessionState::sentReset( bool value ) { m_sentReset.store( value ); }
+
+void SessionState::resendRange( int begin, int end )
+{
+  const Locker l( m_mutex );
+  m_resendRange = std::make_pair( begin, end );
+}
+
+void SessionState::maxQueued( int value ) { m_maxQueued.store( value ); }
+
+bool SessionState::queue( int msgSeqNum, const Message& message )
+{
+  const Locker l( m_mutex );
+  const int cap = m_maxQueued.load();
+  if ( cap > 0 && m_queue.size() >= static_cast<std::size_t>( cap )
+       && m_queue.find( msgSeqNum ) == m_queue.end() )
+    return false;
+  m_queue[ msgSeqNum ] = message;
+  return true;
+}
+
 Session::Session( std::function<UtcTimeStamp()> timestamper,
                   Application& application,
                   MessageStoreFactory& messageStoreFactory,

@@ -128,7 +128,7 @@ bool ThreadedSocketConnection::waitWritable( std::chrono::steady_clock::time_poi
                        && m_drained.size() < MAX_DRAINED;
   // One entry to write, and one to read when this is the reading thread.
   std::array<pollfd, 2> pfds{ { { m_socket, POLLOUT, 0 }, { m_socket, POLLIN, 0 } } };
-  if ( left <= 0 || poll( pfds.data(), reading ? 2 : 1, left ) == 0 ) return false;
+  if ( poll( pfds.data(), reading ? 2 : 1, std::max( left, 0 ) ) == 0 ) return false;
   if ( reading && pfds[1].revents != 0 )
   {
     std::array<char, BUFSIZ> chunk{};
@@ -140,11 +140,25 @@ bool ThreadedSocketConnection::waitWritable( std::chrono::steady_clock::time_poi
 }
 #endif
 
+// KRX fork (U-8): true once the socket is shut down or broken (it does not wait).
+bool ThreadedSocketConnection::shutDown() const
+{
+#ifdef _MSC_VER
+  return false;
+#else
+  pollfd pfd{ m_socket, POLLOUT, 0 };
+  return poll( &pfd, 1, 0 ) > 0 && pfd.revents != POLLOUT;
+#endif
+}
+
 // KRX fork (U-6, Q14): hands the next part of what waitWritable read to the parser; false when
 // nothing is left, and read() reads the socket.
 bool ThreadedSocketConnection::feedDrained()
 {
   if ( m_drainedAt == m_drained.size() ) return false;
+  // KRX fork (U-8): unless the socket was shut down meanwhile (stop()): then that backlog is
+  // dropped, as unread bytes are; nothing in it moved the sequence numbers on.
+  if ( shutDown() ) throw SocketRecvFailed( 0 );
   const std::size_t size = std::min( sizeof( m_buffer ), m_drained.size() - m_drainedAt );
   m_parser.addToStream( m_drained.substr( m_drainedAt, size ) );
   m_drainedAt += size;

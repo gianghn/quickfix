@@ -72,6 +72,7 @@ private:
   bool setSession( const std::string& msg );
   bool waitWritable( std::chrono::steady_clock::time_point deadline );
   bool feedDrained();
+  bool shutDown() const;
 
   socket_handle m_socket;
   char m_buffer[BUFSIZ];

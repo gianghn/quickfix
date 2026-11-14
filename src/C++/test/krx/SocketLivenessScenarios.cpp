@@ -667,6 +667,15 @@ std::string CounterpartyBacklog(const krx::SessionPair& pair, int first_seq, int
   }
   return backlog;
 }
+
+// Whether `count` application messages reached the gateway's fromApp within 5 s.
+bool AppMessagesReach(const krx::SessionPair& pair, int count) {
+  const auto deadline = std::chrono::steady_clock::now() + kWait;
+  while (pair.AppMessages() < count && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return pair.AppMessages() == count;
+}
 }  // namespace
 
 SCENARIO("A resend completes while the counterparty is resending its own backlog",
@@ -680,10 +689,15 @@ SCENARIO("A resend completes while the counterparty is resending its own backlog
       AskForMessagesFrom(pair, 2);
       const bool written = pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), kWait);
       const int resent = written ? ReadResent(pair, kResent) : 0;
-      THEN("every message is resent and no send timed out") {
-        INFO("backlog written: " << written << ", " << resent << " resent; events:\n"
+      const bool delivered = AppMessagesReach(pair, kResent);
+      // Each of the counterparty's messages arrives once: a second copy is "too low".
+      const bool twice = pair.WaitForEvent("MsgSeqNum too low", std::chrono::milliseconds(300));
+      THEN("every message is resent, the counterparty's all arrive once, no send timed out") {
+        INFO("backlog written: " << written << ", " << resent << " resent, " << pair.AppMessages()
+                                 << " delivered; events:\n"
                                  << pair.Events().Dump());
-        REQUIRE((written && resent == kResent && !pair.Events().Contains("Send timed out")));
+        REQUIRE((written && resent == kResent && delivered && !twice &&
+                 !pair.Events().Contains("Send timed out")));
       }
     }
   }
@@ -762,7 +776,8 @@ SCENARIO("At most 10,000 messages wait above a gap, and the resend brings the re
       SkipThenResend(pair, 20000);
       THEN("the queue stopped at 10,000, said so, and every message arrived once") {
         INFO(pair.AppMessages() << " delivered");
-        REQUIRE((pair.Events().Contains("Queue full") && pair.AppMessages() == 20001));
+        // 10,000 dropped: an event on the 1st, 1001st, … 9001st.
+        REQUIRE((pair.Events().Count("Queue full") == 10 && pair.AppMessages() == 20001));
       }
     }
   }
@@ -817,6 +832,26 @@ SCENARIO("A Reject above a gap leaves the missing message to the resend",
       THEN("the session still expects message 2") {
         INFO("expects " << expected << "; events:\n" << pair.Events().Dump());
         REQUIRE((expected == 2));
+      }
+    }
+  }
+}
+
+// Row U-8 (8.7): what U-6's wait read was all handed to the session after stop() had shut the
+// socket down, so stop() waited for up to 64 MB of messages (krx_stress echo-on, 2 of 20 runs).
+SCENARIO("A shut-down connection drops the backlog it read while sending",
+         "[krx][v1][security][u-8]") {
+  GIVEN("a session resending 2000 messages while the counterparty writes 20,000 of its own") {
+    krx::SessionPair pair("KRXRSU8D", WithManyStoredMessages("KRXRSU8D"));
+    LogOn(pair);
+    AskForMessagesFrom(pair, 2);
+    REQUIRE(pair.WriteWithin(CounterpartyBacklog(pair, 3, 20000), kWait));
+    WHEN("the engine shuts the socket down, as stop() does") {
+      ::shutdown(pair.SessionSocket(), SHUT_RDWR);
+      pair.WaitReaderStopped();
+      THEN("the session stops instead of processing the rest of that backlog") {
+        INFO(pair.AppMessages() << " of 20000 processed after the shutdown");
+        REQUIRE((pair.AppMessages() < 20000));
       }
     }
   }
