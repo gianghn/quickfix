@@ -33,13 +33,22 @@ constexpr const char* kFix44 = "FIX.4.4";
 // A session is an acceptor when built with HeartBtInt 0; the counterparty's Logon sets it.
 constexpr int kAcceptor = 0;
 
-FIX::DataDictionaryProvider Fix44Provider(bool preserve_field_order) {
+std::shared_ptr<FIX::DataDictionary> ReadFix44(bool preserve_field_order) {
   const auto dictionary = std::make_shared<FIX::DataDictionary>();
   // Read after the flag: the dictionary keeps each message's field order only while reading.
   dictionary->preserveMessageFieldsOrder(preserve_field_order);
   dictionary->readFromURL(std::string(KRX_SPEC_DIR) + "/FIX44.xml");
+  return dictionary;
+}
+
+// Each dictionary is read once and shared, as sessions share one in the engine: a fuzz run makes a
+// pair per input.
+FIX::DataDictionaryProvider Fix44Provider(bool preserve_field_order) {
+  static const std::shared_ptr<FIX::DataDictionary> plain = ReadFix44(false);
+  static const std::shared_ptr<FIX::DataDictionary> preserved = ReadFix44(true);
   FIX::DataDictionaryProvider provider;
-  provider.addTransportDataDictionary(FIX::BeginString(kFix44), dictionary);
+  provider.addTransportDataDictionary(FIX::BeginString(kFix44),
+                                      preserve_field_order ? preserved : plain);
   return provider;
 }
 
@@ -65,11 +74,13 @@ SessionPair::SessionPair(const std::string& counterparty, const PairOptions& opt
              options.sync_fails),
       id_(FIX::BeginString(kFix44), FIX::SenderCompID("KRXGW"), FIX::TargetCompID(counterparty)),
       session_([] { return FIX::UtcTimeStamp::now(); }, application_, store_, id_,
-               Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_) {
+               Fix44Provider(options.preserve_field_order), AllDay(), kAcceptor, &logs_),
+      manual_reading_(options.manual_reading) {
   // Before the reader thread starts, so the store needs no lock.
   if (options.send_timeout_ms > 0) {
     session_.setSendTimeoutMs(options.send_timeout_ms);
   }
+  session_.setCheckLatency(options.check_latency);
   for (const auto& [seq_num, message] : options.stored_messages) {
     store_.Store()->set(seq_num, message);
     store_.Store()->setNextSenderMsgSeqNum(seq_num + 1);
@@ -80,6 +91,9 @@ SessionPair::SessionPair(const std::string& counterparty, const PairOptions& opt
   peer_ = theirs;
   connection_ = std::make_unique<FIX::ThreadedSocketConnection>(
       ours, FIX::ThreadedSocketConnection::Sessions{id_}, nullptr);
+  if (manual_reading_) {
+    return;
+  }
   reader_ = std::thread([this] {
     while (connection_->read()) {
     }
@@ -92,7 +106,31 @@ SessionPair::~SessionPair() {
   if (reader_.joinable()) {
     reader_.join();
   }
+  while (manual_reading_ && open_) {
+    open_ = connection_->read();
+  }
   application_.JoinProbe();
+}
+
+bool SessionPair::Pump() {
+  pollfd ready{.fd = connection_->getSocket(), .events = POLLIN, .revents = 0};
+  while (open_ && poll(&ready, 1, 0) > 0) {
+    open_ = connection_->read();
+    KeepReplies();
+  }
+  return open_;
+}
+
+void SessionPair::KeepReplies() {
+  pollfd ready{.fd = peer_, .events = POLLIN, .revents = 0};
+  std::array<char, 4096> buffer{};
+  while (poll(&ready, 1, 0) > 0) {
+    const ssize_t got = FIX::socket_recv(peer_, buffer.data(), buffer.size());
+    if (got <= 0) {
+      return;
+    }
+    parser_.addToStream(buffer.data(), static_cast<std::size_t>(got));
+  }
 }
 
 void SessionPair::Write(std::string_view bytes) const {

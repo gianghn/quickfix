@@ -9,6 +9,7 @@
 #                                                 VARIANT: release, asan (ASan+UBSan) or tsan;
 #                                                 fuzz: krx_fuzz instead (ASan, clang 18),
 #                                                 STRESS_ARGS are libFuzzer's (8.6);
+#                                                 session-fuzz: krx_session_fuzz, a live session;
 #                                                 {seed} in STRESS_ARGS is the pod's seed;
 #                                                 --engine: today's harness on an older engine
 #                                                 (a red run)
@@ -22,6 +23,9 @@
 #     --chaos-ms=5000 --report=60 --settle=600
 # 120 CPU-hours of fuzzing, about 24 per mode (8.6):
 #   run.sh start fuzz fuzz 10 10 --hours 13 --cpu 1 -- -max_total_time=43200 -rss_limit_mb=4096
+# 24 CPU-hours of stateful session fuzzing (8.6):
+#   run.sh start sfuzz session-fuzz 4 4 --hours 7 --cpu 1 -- -max_total_time=21600 -max_len=4096 \
+#     -rss_limit_mb=2048 -timeout=30
 # The commit is HEAD, which must be pushed (the pods clone it from GitHub). KUBECONFIG must point
 # at the lab cluster (rke2-lab-ansible/fetched/kubeconfig.yaml).
 set -euo pipefail
@@ -46,7 +50,7 @@ pod_script() {
 set -euo pipefail
 seed=$((JOB_COMPLETION_INDEX + 1))
 packages="g++ cmake make git ca-certificates gdb"
-if [ "$VARIANT" = fuzz ]; then packages="$packages clang-18 libclang-rt-18-dev"; fi
+case "$VARIANT" in *fuzz) packages="$packages clang-18 libclang-rt-18-dev" ;; esac
 apt-get update -qq >/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $packages >/dev/null
 git clone -q --filter=blob:none "$REPO" /w/src
@@ -56,26 +60,30 @@ if [ -n "$ENGINE" ]; then
 fi
 read -ra args <<<"${STRESS_ARGS//\{seed\}/$seed}"
 echo "commit=$COMMIT engine=${ENGINE:-same} variant=$VARIANT seed=$seed node=$NODE"
-if [ "$VARIANT" = fuzz ]; then
-  # Plan item 8.6: libFuzzer with ASan over FixInput's five modes, as the nightly CI job. A crash
-  # input is printed in base64, since the pod's disk goes with it.
+case "$VARIANT" in *fuzz)
+  # Plan item 8.6: libFuzzer with ASan over FixInput's five modes, as the nightly CI job, or over
+  # a live session (session-fuzz, which writes its own seeds). A crash input is printed in base64,
+  # since the pod's disk goes with it.
+  target=krx_fuzz seeds=(/w/src/test/krx/corpus)
+  if [ "$VARIANT" = session-fuzz ]; then target=krx_session_fuzz seeds=(); fi
   flags="-fsanitize=address,fuzzer-no-link -g"
   CC=clang-18 CXX=clang++-18 cmake -S /w/src -B /w/build -DCMAKE_BUILD_TYPE=Debug -DKRX_FUZZ=ON \
     -DQUICKFIX_EXAMPLES=OFF "-DCMAKE_CXX_FLAGS=$flags" -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address \
     -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address >/w/build.log 2>&1 \
     || { tail -50 /w/build.log; exit 2; }
-  cmake --build /w/build --target krx_fuzz --parallel "$(nproc)" >>/w/build.log 2>&1 \
+  cmake --build /w/build --target "$target" --parallel "$(nproc)" >>/w/build.log 2>&1 \
     || { tail -50 /w/build.log; exit 2; }
   mkdir -p /w/corpus /w/crashes
   rc=0
-  /w/build/src/C++/test/krx/krx_fuzz "${args[@]}" -seed="$seed" -artifact_prefix=/w/crashes/ \
-    /w/corpus /w/src/test/krx/corpus || rc=$?
+  "/w/build/src/C++/test/krx/$target" "${args[@]}" -seed="$seed" -artifact_prefix=/w/crashes/ \
+    /w/corpus "${seeds[@]}" || rc=$?
   for input in /w/crashes/*; do
     if [ -f "$input" ]; then echo "CRASH INPUT $input: $(base64 -w0 "$input")"; fi
   done
   if [ "$rc" = 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FUZZ EXIT $rc"; fi
   exit "$rc"
-fi
+  ;;
+esac
 case "$VARIANT" in
   asan) flags="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" ;;
   tsan) flags="-fsanitize=thread -fno-omit-frame-pointer" ;;
@@ -207,7 +215,10 @@ start() {
   done
   [[ ${1:-} == -- ]] || die "missing -- before the krx_stress arguments"
   shift
-  case "$variant" in release | asan | tsan | fuzz) ;; *) die "variant: release, asan, tsan or fuzz" ;; esac
+  case "$variant" in
+    release | asan | tsan | fuzz | session-fuzz) ;;
+    *) die "variant: release, asan, tsan, fuzz or session-fuzz" ;;
+  esac
   local commit pushed manifest
   commit=$(git rev-parse HEAD)
   pushed=$(git branch -r --contains "$commit")
