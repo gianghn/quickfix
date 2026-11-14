@@ -116,6 +116,11 @@ public:
   void reset( const UtcTimeStamp& now ) EXCEPT ( IOException );
   void refresh() EXCEPT ( IOException );
 
+  // KRX fork (15.7): with FileStoreSync, set() skips its sync while a batch is open; endBatch syncs
+  // the body once for the whole batch.
+  void beginBatch() override;
+  bool endBatch() override;
+
 protected:
   // KRX fork (P0-5): forces the file open as `fd` to disk; true once it is there.
   virtual bool syncFile( int fd );
@@ -164,6 +169,8 @@ private:
   // are rebuilt from it after a crash (recoverUnindexed), and a next target seqnum that is behind
   // only makes the counterparty resend.
   bool m_sync = false;
+  bool m_inBatch = false;      // KRX fork (15.7)
+  bool m_batchWritten = false; // KRX fork (15.7): a message was stored in the open batch
   std::atomic<std::uint64_t> m_syncCount{ 0 };
   // KRX fork (15.1): where the next body and header record go: the files' ends, kept in memory.
   std::int64_t m_msgEnd = 0;

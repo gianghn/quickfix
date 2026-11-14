@@ -308,11 +308,13 @@ EXCEPT ( IOException )
   // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each handed to
   // the operating system; the message is in m_offsets only once both are on file. Any failure puts
   // both files back. P0-5: with FileStoreSync the body is on disk before the header record is
-  // written. 15.1: each is one write at the end offset kept in memory.
+  // written. 15.1: each is one write at the end offset kept in memory. 15.7: in a batch, endBatch
+  // syncs the body for all of its messages instead.
   // Named error strings: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
   const std::string bodyError = "Unable to write or sync file " + m_msgFileName;
-  if ( !writeAt( m_msgFile, offset, msg ) || ( m_sync && !syncedToDisk( m_msgFile ) ) )
+  if ( !writeAt( m_msgFile, offset, msg ) || ( m_sync && !m_inBatch && !syncedToDisk( m_msgFile ) ) )
     rollBack( offset, headerEnd, bodyError );
+  m_batchWritten = m_inBatch;
   const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
     + std::to_string( size ) + " ";
   const std::string headerError = "Unable to write to file " + m_headerFileName;
@@ -516,6 +518,21 @@ bool FileStore::syncCopy( int fd )
   const bool synced = m_flushSync( fd );
   close( fd );
   return synced;
+}
+
+void FileStore::beginBatch()
+{
+  m_inBatch = true;
+  m_batchWritten = false;
+}
+
+bool FileStore::endBatch()
+{
+  const bool written = m_inBatch && m_batchWritten;
+  m_inBatch = false;
+  m_batchWritten = false;
+  if ( !m_sync || !written ) return true;
+  return m_msgFile != nullptr && syncedToDisk( m_msgFile );
 }
 
 void FileStore::setFlushSync( bool ( *sync )( int fd ) )

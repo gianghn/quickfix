@@ -78,7 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
-| Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | **batch send with sync, background flush without** (owner, 14 Nov 2026): `FileStoreSync=Y` uses batch send (15.7), nothing reaches the exchange before it is on disk; `FileStoreSync=N` gets a background `fdatasync` every few ms (15.6), a short loss window on host crash, handled by the Q1 runbook. 1a and 1b are not built |
+| Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | **batch send with sync, background flush without** (owner, 14 Nov 2026): `FileStoreSync=Y` uses batch send (15.7), nothing reaches the exchange before it is on disk; `FileStoreSync=N` gets a background `fdatasync` every few ms (15.6), a short loss window on host crash, handled by the Q1 runbook. 1a and 1b are not built. **Production (owner, 14 Nov 2026): background flush**, `FileStoreSync=N` with `FileStoreFlushInterval=5`; batch send stays in the library for sync mode |
 
 ## Ground rules
 
@@ -110,7 +110,7 @@ The owner may change any of these before its phase starts.
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | in progress: 15.1 built (p99.9 to measure again on a quiet node); 15.3 and 15.4 spiked and measured (Handover 15); 15.2 and the build wait for Q18 |
+| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | built on `agent/v1-p15a` (not yet merged): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 open (Handover 15) |
 
 ### Next steps (13 Nov 2026)
 
@@ -559,38 +559,84 @@ here; the four validation setting names became `constexpr const char*` (house li
 **Away from the spec:** none.
 **Left for the owner:** merge #51–#55 in order (each retargeted and green first). Next: Phase 8.
 
-### Handover 15 — 13 Nov 2026
+### Handover 15 — 14 Nov 2026
 
-**Built:** the Phase 15 plan (items 15.0–15.5, Q18) and rows 15.1–15.11, U-16, U-17; 15.0 was
-already done in Phase 8 (a7532eaa: `Stress.cpp` passes clang-tidy); 15.1 (one `pwrite` per body,
-header record and seqnums write, end offsets in memory); `krx_bench` `senders=N`; the 15.3 and 15.4
-spikes on `spike/v1-p15-group-commit` (local, not for merge), measured.
-**Red → green:** 0 → 3 (rows 15.1–15.3 are guards, green before and after; the evidence is U-16).
-`krx_ut` 112 cases, `ut` 53 cases pass (Release, Mac); ASan/UBSan and TSan run in CI.
-**Checks:** `lint.sh .` passes (format, ast-grep, suppressions, tidy, build).
-**Measured:** Linux pod (lab cluster): file 107 k → 194 k msg/s, p50 37.5 → 21.1 µs, but p99.9
-668 → 1,134 µs on a node shared with chaos jobs; sync 1,080 → 1,255 msg/s. Mac (loaded, best of
-5): file 66.8 k → 71.8 k, sync 25.7 k → 27.7 k. Spikes: Linux sync mode about 1 k msg/s
-(`fdatasync` about 1 ms on a consumer NVMe), 1a about 100 k, 1b 0.7 × senders × today.
-**Decisions taken:** Phase 15 numbered after 14 (it ends before 11 measures); the bench pod got
-its own namespace `krx-bench` (owner, 13 Nov 2026), quota 6 CPU, request 150m because the nodes'
-requests were full; Windows keeps the stdio write path.
-**Away from the spec:** none.
-**Left for the owner:** ~~Q18~~ decided 14 Nov 2026 (below); ~~15.1's file p99.9 on a quiet
-node~~ measured on Rocky 9 (no percentile worse); delete namespace `krx-bench` when done
-(`kubectl delete ns krx-bench`).
+Branch `agent/v1-p15a` (from `agent/v1-p8e`, merged as #60; merges cleanly into `krx/main`). Not
+pushed, no PR yet. Numbers: `test/krx/BASELINE.md`; rows: `docs/V1_BDD_CHECKLIST.md` §15.
 
-**Update 14 Nov 2026.** Rocky Linux 9 (userspace in a lab pod): today's sync mode is about
-1.5 k msg/s, 96 % of each send in `fdatasync` (about 0.6 ms on the lab NVMe); the Mac's 27 k was a
-cache-only `fsync`. Spiked and measured: 1a, 1b, and batch send (5.5 k / 18.3 k / 56.8 k msg/s at
-batches of 4 / 16 / 64, nothing lost on power cut). `strace` cannot run on the lab nodes (AppArmor
-blocks `ptrace`); the per-step profile came from timers in the spike build.
-**Decision (owner, Q18):** with `FileStoreSync=Y`, batch send (15.7): the gateway drains each
-session's order queue into one call (one sender thread, never waiting to fill a batch, at most 64);
-`send()` keeps its meaning. With `FileStoreSync=N`, background flush (15.6): `send()` as in file
-mode, a flusher `fdatasync`s every few ms; a host crash loses up to about one interval of sent
-messages, so the Q1 runbook (seqnum fix with HOSE, order reconciliation) stays, with a signed risk
-record (13.8). 1a and 1b are not built (rows 15.7–15.11 dropped).
-**Next:** spike 15.6 on the Rocky pod (speed, per-message latency, the real loss window at 1, 5,
-10 ms), then 15.6 and 15.7 red first (rows 15.12–15.17), each its own PR on `agent/v1-p15a`;
-quickfix-rs binding and the gateway's sender loop for 15.7 in Phases 9–10.
+**Built:**
+- 15.0 `Stress.cpp` clean under clang-tidy: already done in Phase 8 (a7532eaa), checked again.
+- 15.1 (90665b83) fewer system calls per stored message, same files and format: body and header
+  record are one `pwrite` each at end offsets kept in memory (`m_msgEnd`, `m_headerEnd`, set in
+  `open()` after recovery); seqnums one `pwrite` at 0; Windows keeps the stdio path.
+- 15.6 (78cab7d4) background flush for `FileStoreSync=N`. New setting `FileStoreFlushInterval`
+  (ms; 0 or absent = off; ignored when `FileStoreSync=Y`); new `FileStore` constructor parameter
+  `flushIntervalMs = 0`. One flusher thread per store, started on the first write, `fdatasync`s
+  body and seqnums on a fixed tick when anything was written (it syncs `dup`ed descriptors taken
+  under `m_flushMutex`, so a write never waits for a sync). A failed flush makes the next `set()`
+  throw, so the send fails closed (D7). The flusher syncs through the protected `setFlushSync`
+  (a plain function, default `fdatasync`; the tests' failing-disk seam), never the virtual
+  `syncFile`, so it cannot call into a subclass being destroyed. `syncFile` stays the seam for the
+  sync-mode writes (15.7's `SyncFailingFileStore`).
+- 15.7 (e3374ac0) batch send for `FileStoreSync=Y`: `std::size_t Session::send( std::vector<Message>& )`
+  and static `Session::sendToTarget( std::vector<Message>&, const SessionID& )`. Under one hold of
+  the session lock: `store->beginBatch()`, each message stored without a sync, `endBatch()` syncs
+  the body once, then the batch goes to the socket in seqnum order. Returns how many went out,
+  from the first; a refused message ends the batch there. A failed batch sync logs "Store write
+  failed, disconnecting: unable to sync a batch to disk", disconnects and returns 0.
+  `MessageStore::beginBatch()`/`endBatch()` are new virtuals that do nothing by default.
+- `krx_bench` arguments: `senders` [6], `flush_ms` [7], `batch` [8]. Tests:
+  `src/C++/test/krx/StoreThroughputScenarios.cpp`; `SessionPair` gained `SyncFailingFileStore`,
+  `PairOptions.sync_fails` and `SendBatch`.
+
+**Production (owner, 14 Nov 2026): background flush.** The gateway runs `FileStoreSync=N` with
+`FileStoreFlushInterval=5` and keeps calling `send()` as today; a host crash or power cut can lose
+up to about 10 ms of sent orders, recovered by the Q1 runbook (seqnum fix with HOSE, order
+reconciliation; signed risk record, 13.8). The batch send (15.7) stays in the library for sync
+mode; the quickfix-rs binding and the gateway's batch sender loop (Phases 9–10) are not needed for
+production unless sync mode comes back. With sync on, one sender thread per session would drain the
+order queue into one `sendToTarget(vector, id)` call, never waiting to fill a batch, at most 64 a
+call; orders after the returned count were not sent.
+
+**Red → green:** 15.1: 0 → 3 (guards, green before and after; evidence U-16). 15.6: 3 → 3 (rows
+15.12–15.14). 15.7: 3 → 3 (rows 15.15–15.17).
+**Checks:** `krx_ut` 118 cases and `ut` 53 pass (Release, Mac); TSan (Mac) clean on 25 store and
+send scenarios; `lint.sh .` passes. Linux ASan/UBSan, TSan and Mull run in CI only, not yet run.
+**Measured (Rocky 9 userspace in lab pods, ext4 on consumer NVMe):**
+- Today's sync mode: about 1.1–1.5 k msg/s, 96 % of each send in `fdatasync` (about 0.6 ms; the
+  Mac's 27 k was a cache-only `fsync`).
+- 15.1, file mode: 138 k → 254 k msg/s, no percentile worse.
+- 15.7, sync on: batch 4 / 16 / 64 = 3.7 k / 11.8 k / 32.2 k msg/s (3.4× / 10.6× / 29×), call p50
+  0.9–1.4 ms (node3, busy).
+- 15.6: flush off costs nothing (D9 holds). Flush 5 ms: 0 % (node2) to 4.5 % (node3) slower;
+  messages at risk on a host crash p50 7.7 / p99 9.2 ms (was up to the kernel's ~30 s). An earlier
+  −25 % on node3 came with three soak jobs running, not from the flush.
+
+**Measured, not built:** 15.3 (1a: `send()` returns before the sync) and 15.4 (1b: one sync shared by
+sender threads), spikes on local branch `spike/v1-p15-group-commit`; owner chose 15.6 and 15.7
+instead (Q18, rows 15.7–15.11 dropped). Pre-sizing the body file (`fallocate` or zeros), spike on
+local branch `spike/v1-p15-presize`: no gain (`fallocate` within the noise, zeros 30–37 % slower);
+look again only if 11.7 shows flush stalls on the production disk. Both spike branches fail tidy on
+purpose and are never merged.
+
+**Decisions taken:** Phase 15 numbered after 14; bench pods in their own namespace `krx-bench`
+(owner, 13 Nov 2026; quota 6 CPU, request 150m); Windows keeps stdio writes; a batch result is a
+count from the first; a refused message ends the batch; the batch's wire text is logged when
+written; a failed flush fails the next `set()` rather than the session at once (the store cannot
+reach the session); the batch hooks default to nothing, so other stores (quickfix-rs's included)
+need no change.
+**Away from the spec:** 15.7 is an overload `sendToTarget(vector, id)` returning a count, not
+`sendToTargetBatch` with a per-message result. 15.6 is off by default, not 5 ms: opt-in per D8.
+**Left for the owner:**
+- Merge the three stacked PRs in order: `agent/v1-p15a` (15.1 and the plan), `agent/v1-p15b`
+  (15.6), `agent/v1-p15c` (15.7 and the measurements).
+- This decision was Q17 until 14 Nov 2026; renumbered Q18 (owner) because open PR #65
+  (`agent/v1-p8i`) took Q17 for the resend range. `docs/V1_PLAN.md` conflicts with #62 and #65:
+  whichever merges second resolves it (both add rows to Decisions, Progress and Handover notes).
+- 15.2 (skip the seqnums write the body already records): still open; small gain in file mode, some
+  risk around admin resets; proposal: drop it.
+- 11.7 on the production disk (likely XFS): sync cost and flush cost decide the batch cap and
+  interval.
+- Production uses background flush: Phases 9–10 need only the `FileStoreFlushInterval` setting
+  passed through; the batch-send binding and sender loop wait unless sync mode comes back.
+- Cleanup: `kubectl delete ns krx-bench`; delete the two local spike branches.

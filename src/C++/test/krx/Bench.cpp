@@ -4,9 +4,11 @@
 //   ping-pong:  the acceptor echoes each order; round trip from the steady-clock nanoseconds the
 //               order carries in Text(58). Prints p50/p99/p99.9/max.
 // Usage: krx_bench [mem|file|sync] [orders=200000] [round_trips=20000] [port=7800] [workdir]
-//                  [senders=1] [flush_ms=0]
+//                  [senders=1] [flush_ms=0] [batch=1]
 //   senders: threads sending the throughput orders on the one session at once (plan item 15.4).
 //   flush_ms: FileStoreFlushInterval, the background flush of a file store without sync (15.6).
+//   batch: > 1 sends the throughput orders from one thread in batches (Session::sendToTarget of a
+//          vector, 15.7) and prints each batch call's time.
 //   sync: the file store with FileStoreSync=Y (plan item 4.4).
 // Numbers from a shared machine are rough; compare runs on the same machine only.
 #include <algorithm>
@@ -104,6 +106,7 @@ struct Options {
   std::filesystem::path workdir = "bench_work";
   int senders = 1;
   int flush_ms = 0;
+  int batch = 1;
 };
 
 Options Parse(std::span<char*> args) {
@@ -130,6 +133,9 @@ Options Parse(std::span<char*> args) {
   }
   if (args.size() > 7) {
     options.flush_ms = std::max(0, std::stoi(args[7]));
+  }
+  if (args.size() > 8) {
+    options.batch = std::max(1, std::stoi(args[8]));
   }
   return options;
 }
@@ -181,19 +187,49 @@ void WaitFor(const BenchApp& acceptor, std::int64_t count) {
 }
 
 // `senders` threads share `orders` and send them on the one session at once (plan item 15.4).
-void Throughput(BenchApp& acceptor, const FIX::SessionID& id, std::int64_t orders, int senders) {
+void SendFromThreads(const FIX::SessionID& id, std::int64_t orders, int senders) {
+  std::vector<std::jthread> threads;
+  threads.reserve(static_cast<std::size_t>(senders));
+  for (int sender = 0; sender < senders; ++sender) {
+    threads.emplace_back([sender, senders, orders, &id] {
+      for (std::int64_t number = sender; number < orders; number += senders) {
+        Send(number, id);
+      }
+    });
+  }
+}
+
+// One thread sends `orders` in batches of `batch` (15.7) and prints each batch call's time: every
+// order's time from the call until it is on disk and written.
+void SendBatches(const FIX::SessionID& id, std::int64_t orders, int batch) {
+  std::vector<std::int64_t> calls;
+  for (std::int64_t first = 0; first < orders; first += batch) {
+    std::vector<FIX::Message> messages;
+    for (std::int64_t number = first; number < std::min(orders, first + batch); ++number) {
+      messages.emplace_back(Order(number));
+    }
+    const auto start = Clock::now();
+    FIX::Session::sendToTarget(messages, id);
+    calls.push_back(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+  }
+  std::ranges::sort(calls);
+  const auto at = [&calls](double fraction) {
+    const auto index = static_cast<std::size_t>(fraction * static_cast<double>(calls.size()));
+    return static_cast<double>(calls[std::min(calls.size() - 1, index)]) / 1000.0;
+  };
+  std::cout << std::format("batch={} calls={} call time (us): p50={:.1f} p99={:.1f} max={:.1f}\n",
+                           batch, calls.size(), at(0.5), at(0.99), at(1.0));
+}
+
+void Throughput(BenchApp& acceptor, const FIX::SessionID& id, const Options& options) {
+  const std::int64_t orders = options.orders;
   acceptor.ResetReceived();
   const auto start = Clock::now();
-  {
-    std::vector<std::jthread> threads;
-    threads.reserve(static_cast<std::size_t>(senders));
-    for (int sender = 0; sender < senders; ++sender) {
-      threads.emplace_back([sender, senders, orders, &id] {
-        for (std::int64_t number = sender; number < orders; number += senders) {
-          Send(number, id);
-        }
-      });
-    }
+  if (options.batch > 1) {
+    SendBatches(id, orders, options.batch);
+  } else {
+    SendFromThreads(id, orders, options.senders);
   }
   const std::chrono::duration<double> sending = Clock::now() - start;
   WaitFor(acceptor, orders);
@@ -269,7 +305,7 @@ int Run(std::span<char*> args) {
     Send(number, id);
   }
   WaitFor(acceptor_app, kWarmup);
-  Throughput(acceptor_app, id, options.orders, options.senders);
+  Throughput(acceptor_app, id, options);
   PingPong(acceptor_app, initiator_app, id, options.round_trips);
   initiator.stop();
   acceptor.stop();
