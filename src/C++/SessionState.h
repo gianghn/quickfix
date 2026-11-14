@@ -74,12 +74,14 @@ public:
   bool sentLogon() const { return m_sentLogon.load(); }
   void sentLogon( bool value ) { m_sentLogon.store( value ); }
 
-  // KRX fork (U-4, 8.3): Session::disconnect() from another thread resets these too.
+  // KRX fork (U-4, 8.3): Session::disconnect() from another thread resets these too. The fork's
+  // setters are defined once, in Session.cpp: an inline copy per source file let Mull mutate a
+  // copy no test reached (MAINTENANCE §5).
   bool receivedReset() const { return m_receivedReset.load(); }
-  void receivedReset( bool value ) { m_receivedReset.store( value ); }
+  void receivedReset( bool value );
 
   bool sentReset() const { return m_sentReset.load(); }
-  void sentReset( bool value ) { m_sentReset.store( value ); }
+  void sentReset( bool value );
 
   bool initiate() const { return m_initiate; }
   void initiate( bool value ) { m_initiate = value; }
@@ -104,8 +106,7 @@ public:
   // KRX fork (U-4, 8.3): read by the reading thread while disconnect() from another thread clears
   // it; under the state's lock, so a reader never gets half of one range and half of another.
   ResendRange resendRange () const { const Locker l( m_mutex ); return m_resendRange; }
-  void resendRange (int begin, int end)
-  { const Locker l( m_mutex ); m_resendRange = std::make_pair( begin, end ); }
+  void resendRange (int begin, int end);
 
   MessageStore* store() { return m_pStore; }
   void store( MessageStore* pValue ) { m_pStore = pValue; }
@@ -171,17 +172,8 @@ public:
   // by default, 0 for no limit); false when this one was dropped instead (the open ResendRequest
   // asks up to the latest, so it comes back).
   int maxQueued() const { return m_maxQueued.load(); }
-  void maxQueued( int value ) { m_maxQueued.store( value ); }
-  bool queue( int msgSeqNum, const Message& message )
-  {
-    const Locker l( m_mutex );
-    const int cap = m_maxQueued.load();
-    if ( cap > 0 && m_queue.size() >= static_cast<std::size_t>( cap )
-         && m_queue.find( msgSeqNum ) == m_queue.end() )
-      return false;
-    m_queue[ msgSeqNum ] = message;
-    return true;
-  }
+  void maxQueued( int value );
+  bool queue( int msgSeqNum, const Message& message );
   bool retrieve( int msgSeqNum, Message& message )
   {
     Locker l( m_mutex );
