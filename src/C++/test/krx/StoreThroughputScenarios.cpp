@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -286,6 +287,26 @@ SCENARIO("A store destroyed or reset while its flusher runs opens again with wha
         const int wrong = FirstWrong(reopened, 1, 100);
         INFO("destroy took " << took.count() << " ms; first wrong: " << wrong);
         REQUIRE((took < kFlushedWithin && wrong == 0 && Read(reopened, 101) == "<missing>"));
+      }
+    }
+  }
+}
+
+SCENARIO("Seqnums at the edges of the format are written as printf's \"%10.10d\" writes them",
+         "[krx][v1][p15]") {
+  GIVEN("a file store") {
+    const krx::TempDir dir("store153edge");
+    FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+    WHEN("the seqnums are set to 0 and -5, then to the largest and smallest int") {
+      store.setNextSenderMsgSeqNum(0);
+      store.setNextTargetMsgSeqNum(-5);
+      const std::string small = Contents(StoreFile(dir, "seqnums"));
+      store.setNextSenderMsgSeqNum(std::numeric_limits<int>::max());
+      store.setNextTargetMsgSeqNum(std::numeric_limits<int>::min());
+      const std::string limits = Contents(StoreFile(dir, "seqnums"));
+      THEN("the file reads \"0000000000 : -0000000005\", then \"2147483647 : -2147483648\"") {
+        INFO("small: '" << small << "', limits: '" << limits << "'");
+        REQUIRE((small == "0000000000 : -0000000005" && limits == "2147483647 : -2147483648"));
       }
     }
   }
