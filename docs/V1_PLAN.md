@@ -228,9 +228,9 @@ Nothing else can be TDD'd until this exists.
 - 9.4 Trap-3: pin the threaded classes explicitly; vendor `libquickfix` from the `krx-1.0.0` tag, not upstream master.
 - 9.5 Make `quickfix/tests/test_session.rs` reliable (unique session IDs per test, `&&` logon wait, no fixed sleeps), then `cargo-mutants` on the FFI callback module.
 - 9.6 Phase 15 into quickfix-rs (Q18, production is background flush):
-  - Pin `quickfix-ffi/libquickfix` at `krx/main` @ `0275975e` (all of Phase 15). No binding change: `FileStoreFlushInterval` is a session setting that `FileStoreFactory` reads from the `.ini`, like `FileStoreSync`.
+  - Pin `quickfix-ffi/libquickfix` at the `krx/main` head when 9.6 starts (`0275975e` or later: all of Phase 15). No binding change: `FileStoreFlushInterval` is a session setting that `FileStoreFactory` reads from the `.ini`, like `FileStoreSync`.
   - Update `KRX_FORK_NOTES.md` (a new pin row), `quickfix/CHANGELOG.md` and `KRX_GATEWAY_HANDOVER.md` §3: its "`FileStoreSync=Y`" line becomes `FileStoreSync=N` with `FileStoreFlushInterval=5` (ms).
-  - What consumers see: one flusher thread per file store; up to about 10 ms of sent messages can be lost on a host crash or power cut, so the Q1 runbook stays; a failed flush makes the next store write throw and the session disconnects (D7), as a failed sync does with `FileStoreSync=Y`.
+  - What consumers see: one flusher thread per file store; about 10 ms of sent messages (p99, lab NVMe; 11.7 measures the production disk) can be lost on a host crash or power cut, so the Q1 runbook stays; a failed flush makes the next store write throw and the session disconnects (D7), as a failed sync does with `FileStoreSync=Y`.
   - Test: a `test_session.rs` case runs a session with a file store and `FileStoreFlushInterval=5`, sends, and drops it cleanly (the flusher is joined).
   - Batch send (15.7, `FileStoreSync=Y` only) gets no FFI binding unless production goes back to sync mode.
 
