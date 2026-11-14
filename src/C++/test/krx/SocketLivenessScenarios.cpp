@@ -34,6 +34,7 @@
 
 #include "Application.h"
 #include "Dictionary.h"
+#include "FaultyFile.h"
 #include "FieldTypes.h"
 #include "FixFields.h"
 #include "Message.h"
@@ -892,6 +893,47 @@ SCENARIO("A queue refuses messages past its cap, and 0 means no limit", "[krx][v
       const bool fourth = state.queue(6, FIX::Message());
       THEN("the third is refused and the fourth is kept") {
         REQUIRE((first && second && !third && fourth));
+      }
+    }
+  }
+}
+
+namespace {
+constexpr int kLargeBacklog = 200000;
+
+// A FileStore in `dir` holding messages 2..kLargeBacklog+1, each a short BusinessMessageReject.
+krx::PairOptions WithLargeFileBacklog(const std::string& counterparty, const krx::TempDir& dir) {
+  krx::PairOptions options;
+  options.file_store_dir = dir.Path().string();
+  for (int seq = 2; seq < kLargeBacklog + 2; ++seq) {
+    options.stored_messages[seq] = StoredMessage(counterparty, seq, 10);
+  }
+  return options;
+}
+}  // namespace
+
+// Row U-6 (8.5, owner decision Q17): a resend loaded its whole range from the store before it sent
+// anything, and its thread read nothing meanwhile; a counterparty resending at the same time timed
+// out its send (krx_stress echo-on: 340 k messages to load, 4 of 20 runs never caught up).
+SCENARIO("A large resend starts sending and reading before its whole range is loaded",
+         "[krx][v1][security][u-6]") {
+  GIVEN("a logged-on session with 200,000 messages to resend in a FileStore") {
+    const krx::TempDir dir("krx-q17");
+    krx::SessionPair pair("KRXRSQ17", WithLargeFileBacklog("KRXRSQ17", dir));
+    LogOn(pair);
+    WHEN("the counterparty asks for them all, then writes 2000 messages of its own at once") {
+      AskForMessagesFrom(pair, 2);
+      const auto asked = std::chrono::steady_clock::now();
+      const bool written =
+          pair.WriteWithin(CounterpartyBacklog(pair, 3, kResent), std::chrono::milliseconds(100));
+      const auto took = std::chrono::steady_clock::now() - asked;
+      // Loading all 200,000 first takes about 200 ms here (a 340 k-message load in krx_stress took
+      // longer than its peer's 500 ms send timeout); one chunk takes about a millisecond.
+      THEN("the session takes them within 100 ms") {
+        INFO("written: " << written << " after "
+                         << std::chrono::duration_cast<std::chrono::milliseconds>(took).count()
+                         << " ms");
+        REQUIRE(written);
       }
     }
   }

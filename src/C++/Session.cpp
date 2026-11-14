@@ -27,6 +27,7 @@
 #include "Values.h"
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <iostream>
 #include <string_view>
 #include <thread>
@@ -493,8 +494,13 @@ void Session::nextResendRequest( const Message& resendRequest, const UtcTimeStam
 
 void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
 {
+  // KRX fork (U-6, Q17): the range is read from the store kResendChunk messages at a time. Read
+  // whole first, a large range (340 k messages) kept this thread from sending, and so from reading
+  // the counterparty, longer than its send timeout: a counterparty resending too then disconnected.
+  constexpr int kResendChunk = 1000;
   std::vector<std::string> messages;
-  m_state.get( beginSeqNo, endSeqNo, messages );
+  std::size_t next = 0;
+  int nextChunk = beginSeqNo;
 
   std::vector<std::string>::iterator i;
   MsgSeqNum msgSeqNum(0);
@@ -506,8 +512,17 @@ void Session::generateRetransmits(int beginSeqNo, int endSeqNo)
   const Responder* const responder = m_pResponder;
   auto nextYield = std::chrono::steady_clock::now();
 
-  for ( i = messages.begin(); i != messages.end(); ++i )
+  for ( ;; ++next )
   {
+    while ( next == messages.size() && nextChunk <= endSeqNo )
+    {
+      messages.clear();
+      m_state.get( nextChunk, std::min( endSeqNo, nextChunk + kResendChunk - 1 ), messages );
+      nextChunk += kResendChunk;
+      next = 0;
+    }
+    if ( next == messages.size() ) break;
+    i = messages.begin() + static_cast<std::ptrdiff_t>( next );
     // KRX fork (P0-3): the caller holds m_mutex; after each millisecond of resending, let the
     // threads waiting for it in (for up to a millisecond), and stop if the connection went away
     // meanwhile. KRX fork (Q15): it was before every message, up to 10 ms each, so a steady order
