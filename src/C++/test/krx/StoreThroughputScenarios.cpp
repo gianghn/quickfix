@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -152,6 +153,26 @@ SCENARIO("After every update the seqnums file holds the last seqnums in its exis
       THEN("the file reads \"0000012345 : 0000000067\", then \"0000000005 : 0000000068\"") {
         INFO("raised: '" << raised << "', lowered: '" << lowered << "'");
         REQUIRE((raised == "0000012345 : 0000000067" && lowered == "0000000005 : 0000000068"));
+      }
+    }
+  }
+}
+
+SCENARIO("Seqnums at the edges of the format are written as printf's \"%10.10d\" writes them",
+         "[krx][v1][p15]") {
+  GIVEN("a file store") {
+    const krx::TempDir dir("store153edge");
+    FIX::FileStore store(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession());
+    WHEN("the seqnums are set to 0 and -5, then to the largest and smallest int") {
+      store.setNextSenderMsgSeqNum(0);
+      store.setNextTargetMsgSeqNum(-5);
+      const std::string small = Contents(StoreFile(dir, "seqnums"));
+      store.setNextSenderMsgSeqNum(std::numeric_limits<int>::max());
+      store.setNextTargetMsgSeqNum(std::numeric_limits<int>::min());
+      const std::string limits = Contents(StoreFile(dir, "seqnums"));
+      THEN("the file reads \"0000000000 : -0000000005\", then \"2147483647 : -2147483648\"") {
+        INFO("small: '" << small << "', limits: '" << limits << "'");
+        REQUIRE((small == "0000000000 : -0000000005" && limits == "2147483647 : -2147483648"));
       }
     }
   }

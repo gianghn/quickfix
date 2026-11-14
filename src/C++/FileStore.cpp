@@ -29,6 +29,7 @@
 #include "Utility.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -89,8 +90,8 @@ bool writeAt( FILE* file, std::int64_t offset, const std::string& data )
 // KRX fork (15.1): `value` as printf's "%10.10d" writes it: at least ten digits, zero-padded.
 std::string tenDigits( int value )
 {
-  std::string digits = std::to_string( value < 0 ? -static_cast<std::int64_t>( value ) : value );
-  if ( digits.size() < 10 ) digits.insert( 0, 10 - digits.size(), '0' );
+  std::string digits = std::to_string( std::abs( static_cast<std::int64_t>( value ) ) );
+  digits.insert( 0, 10 - digits.size(), '0' ); // an int has at most ten digits
   return value < 0 ? "-" + digits : digits;
 }
 }
