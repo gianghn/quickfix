@@ -16,6 +16,7 @@ Upstream picks keep their upstream tests in `ut`.
 | `src/C++/test/krx/SendTruthScenarios.cpp` | `[krx][v1]` + defect tag | 5.1–5.5 | `SessionPair.h` | Catch2 `krx_ut` | 5 |
 | `src/C++/test/krx/TeardownRaceScenarios.cpp` | `[krx][v1][tsan]` + defect tag | 6.1–6.6 | `SessionPair.h` | Catch2 `krx_ut` (TSan job) | 6 |
 | `src/C++/test/krx/UpstreamPicksScenarios.cpp` | `[krx][v1][upstream]` | 7.1–7.6 | upstream tests as picked | Catch2 `krx_ut`, `ut` | 7 |
+| `src/C++/test/krx/StoreThroughputScenarios.cpp` | `[krx][v1][p15]` | 15.1–15.11 | `FaultyFile.h` | Catch2 `krx_ut` | 15 |
 | `quickfix/tests/test_callback_panic.rs` (quickfix-rs) | — | 9.1–9.3 | — | `cargo test` | 9 |
 | `tests/features/order_safety.feature` (gateway) | `@krx @v1 @order` | 10.1–10.6 | gateway steps | cucumber-rs | 10 |
 | `tests/features/callback_discipline.feature` (gateway) | `@krx @v1 @concurrency` | 10.7 | gateway steps | cucumber-rs | 10 |
