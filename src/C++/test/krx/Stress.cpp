@@ -230,15 +230,10 @@ class Tracker {
 };
 
 // The MsgSeqNum each message first went out with (toApp runs after the header is filled); 4 bytes
-// a message, so a soak (--soak) records none.
+// a message, kept in a soak too (--soak): a lost message without its MsgSeqNum can't be traced.
 class Sequences {
  public:
-  void Disable() { enabled_.store(false); }
-
   void Record(const std::string& key, std::int64_t number, int seq) {
-    if (!enabled_.load()) {
-      return;
-    }
     const std::scoped_lock lock(mutex_);
     std::vector<int>& seqs = seqs_[key];
     const auto index = static_cast<std::size_t>(number);
@@ -256,7 +251,6 @@ class Sequences {
   }
 
  private:
-  std::atomic<bool> enabled_{true};
   mutable std::mutex mutex_;
   std::map<std::string, std::vector<int>> seqs_;
 };
@@ -1041,10 +1035,6 @@ int Run(const Options& options) {
   const int fds_before = CountFds();
   Direction orders;
   Direction echoes;
-  if (options.soak) {
-    orders.sequences.Disable();
-    echoes.sequences.Disable();
-  }
   StressApp acceptor_app(true, options.echo, echoes, orders);
   StressApp initiator_app(false, options.echo, orders, echoes);
   Rig rig(options, acceptor_app, initiator_app);

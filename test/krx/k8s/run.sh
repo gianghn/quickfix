@@ -5,7 +5,7 @@
 #
 #   run.sh setup                                  the namespace and its quota (namespace.yaml)
 #   run.sh start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] [--memory GI]
-#                                                 -- STRESS_ARGS...
+#                                                 [--disk GI] -- STRESS_ARGS...
 #                                                 VARIANT: release, asan (ASan+UBSan) or tsan;
 #                                                 fuzz: krx_fuzz instead (ASan, clang 18),
 #                                                 STRESS_ARGS are libFuzzer's (8.6);
@@ -31,6 +31,7 @@ readonly REPO=https://github.com/gianghn/quickfix.git
 ENGINE="" # --engine: the engine's sources (src/C++ but its tests) from this commit instead
 CPU=2     # --cpu: CPUs a pod requests (it may use twice that); a soak or a fuzzer needs 1
 MEMORY=6  # --memory: the pod's memory limit in GiB (it requests half); an echo-on soak needs 16
+DISK=8    # --disk: the pod's disk limit in GiB (it requests half); an 8 h soak needs 16, 32 with echo
 HERE=$(cd "$(dirname "$0")" && pwd)
 readonly HERE
 
@@ -174,8 +175,8 @@ YAML
             - name: NODE
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
           resources:
-            requests: {cpu: "$CPU", memory: $((MEMORY / 2))Gi, ephemeral-storage: 4Gi}
-            limits: {cpu: "$((CPU * 2))", memory: ${MEMORY}Gi, ephemeral-storage: 8Gi}
+            requests: {cpu: "$CPU", memory: $((MEMORY / 2))Gi, ephemeral-storage: $((DISK / 2))Gi}
+            limits: {cpu: "$((CPU * 2))", memory: ${MEMORY}Gi, ephemeral-storage: ${DISK}Gi}
           # gdb takes the stacks of a hang and LeakSanitizer stops the threads it checks, both with
           # ptrace: Yama wants the capability, the runtime's AppArmor and seccomp profiles deny it.
           securityContext:
@@ -191,14 +192,15 @@ YAML
 }
 
 start() {
-  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] [--memory GI] -- ARGS..."
+  [[ $# -ge 5 ]] || die "start NAME VARIANT RUNS PARALLEL [--hours H] [--engine SHA] [--cpu N] [--memory GI] [--disk GI] -- ARGS..."
   local name=$1 variant=$2 runs=$3 parallel=$4 hours=4
   shift 4
-  while [[ ${1:-} =~ ^--(hours|engine|cpu|memory)$ ]]; do
+  while [[ ${1:-} =~ ^--(hours|engine|cpu|memory|disk)$ ]]; do
     case "$1" in
       --hours) hours=$2 ;;
       --engine) ENGINE=$2 ;;
       --memory) MEMORY=$2 ;;
+      --disk) DISK=$2 ;;
       *) CPU=$2 ;;
     esac
     shift 2
