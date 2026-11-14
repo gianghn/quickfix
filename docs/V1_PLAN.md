@@ -78,6 +78,7 @@ The owner may change any of these before its phase starts.
 | Q14 | Echo-on chaos found a livelock: after an outage both sides resend from their reading threads, neither reads, both sends time out, again on every reconnect. Fix it? | fix in 8.5, red first · document as a known limit · defer to a later release | fix in 8.5, red first | Phase 8 | **fix in 8.5, red first** (owner, 13 Nov 2026): the reading thread keeps reading while it waits to send (U-6) |
 | Q15 | Under a steady order flow a large resend crawls (about 100 messages/s: P0-3 yields up to 10 ms before every message); the peer queues everything sent meanwhile (1.9 GB, OOM at 6 GiB, stops over 15 s). How do resend and senders share the session (item 3.8)? | bounded yield · senders wait for the resend · keep the yield, throttle the harness | bounded yield | Phase 8 | **bounded yield, red first** (owner, 13 Nov 2026): senders get in once per millisecond of resending, for up to a millisecond; row 3.5 still holds. Closes 3.8's yield decision |
 | Q16 | Messages above a gap are queued without a limit. Cap the queue? | cap and drop · no cap, document · defer to Phase 11 | cap and drop | Phase 8 | **cap and drop, red first** (owner, 13 Nov 2026): at most 10,000 per session; the rest are dropped with an error event and come back with the resend (row U-9). The cap is the session setting `MaxQueuedMessages` (owner asked, 13 Nov 2026; 0 for no limit) |
+| Q17 | A resend loads its whole range from the store before it sends; a large one (340 k messages) outlasts a counterparty's send timeout when both resend, so 4 of 20 echo-on runs never caught up. How should the resend load? | in chunks · keep it, slower heartbeat in the harness · document only | in chunks | Phase 8 | **in chunks, red first** (owner, 14 Nov 2026): 1000 messages at a time |
 | Q18 | With `FileStoreSync=Y` each message waits for its own disk sync, in turn, under the session lock: about 1.5 k msg/s on Linux (Rocky 9 userspace, a lab NVMe; the Mac's 25 k is a cache-only `fsync`) (Phase 15). How do messages share a sync? | 15.3 decoupled (1a): `send()` returns once written, a flusher syncs a batch and only then puts it on the wire · 15.4 shared (1b): senders on one session wait for one sync together, `send()` keeps its meaning · batch send: the gateway hands a batch to one call, one sync, `send()` keeps its meaning, no extra thread · neither: one sync per message | batch send if the gateway can drain its order queue into one call (37× at 64, no new thread, `send()` unchanged); 1a only if more is needed (about 100× from one sender, but `send()` changes meaning and needs a "not sent" event); either way only if 11.7's production disk syncs in more than about 100 µs | Phase 15 | **batch send with sync, background flush without** (owner, 14 Nov 2026): `FileStoreSync=Y` uses batch send (15.7), nothing reaches the exchange before it is on disk; `FileStoreSync=N` gets a background `fdatasync` every few ms (15.6), a short loss window on host crash, handled by the Q1 runbook. 1a and 1b are not built. **Production (owner, 14 Nov 2026): background flush**, `FileStoreSync=N` with `FileStoreFlushInterval=5`; batch send stays in the library for sync mode |
 
 ## Ground rules
@@ -103,14 +104,14 @@ The owner may change any of these before its phase starts.
 | 5 | No silent loss | 5.1–5.4 | P0-6, P0-8 | done (#42–#44); 5.4 not needed (Q3) |
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
-| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | code merged (#57–#61, Handover 8): 8.1, 8.2, the 8.5 fixes and 8.7 done; on the lab cluster still: 8.3's final batch, 8.4 (TSan 1 h × 10), 8.5 (20 echo-on runs, 8 h soak), 8.6 (fuzzing) |
-| 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
+| 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | code merged (#57–#61, #63–#65, #70, #71; Handover 8): 8.1, 8.2, 8.5, 8.6, 8.7 done; 8.3 and 8.4 results in Handover 8 |
+| 9 | quickfix-rs fork fails closed | 9.1–9.6 | P0-9, Trap-3, Q18 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
 | 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | not started |
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | built on `agent/v1-p15a` (not yet merged): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 open (Handover 15) |
+| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | done (#66, #67, #68): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 dropped (Handover 15) |
 
 ### Next steps (13 Nov 2026)
 
@@ -227,6 +228,12 @@ Nothing else can be TDD'd until this exists.
 - 9.3 Compile-time `Send + Sync` assertion on the callback type; no `&Message` kept past a callback.
 - 9.4 Trap-3: pin the threaded classes explicitly; vendor `libquickfix` from the `krx-1.0.0` tag, not upstream master.
 - 9.5 Make `quickfix/tests/test_session.rs` reliable (unique session IDs per test, `&&` logon wait, no fixed sleeps), then `cargo-mutants` on the FFI callback module.
+- 9.6 Phase 15 into quickfix-rs (Q18, production is background flush):
+  - Pin `quickfix-ffi/libquickfix` at the `krx/main` head when 9.6 starts (`0275975e` or later: all of Phase 15). No binding change: `FileStoreFlushInterval` is a session setting that `FileStoreFactory` reads from the `.ini`, like `FileStoreSync`.
+  - Update `KRX_FORK_NOTES.md` (a new pin row), `quickfix/CHANGELOG.md` and `KRX_GATEWAY_HANDOVER.md` §3: its "`FileStoreSync=Y`" line becomes `FileStoreSync=N` with `FileStoreFlushInterval=5` (ms).
+  - What consumers see: one flusher thread per file store; about 10 ms of sent messages (p99, lab NVMe; 11.7 measures the production disk) can be lost on a host crash or power cut, so the Q1 runbook stays; a failed flush makes the next store write throw and the session disconnects (D7), as a failed sync does with `FileStoreSync=Y`.
+  - Test: a `test_session.rs` case runs a session with a file store and `FileStoreFlushInterval=5`, sends, and drops it cleanly (the flusher is joined).
+  - Batch send (15.7, `FileStoreSync=Y` only) gets no FFI binding unless production goes back to sync mode.
 
 ### Phase 10 — Gateway integration and conformance · **high** · `enCapital/krx_gateway_rust`
 
@@ -306,7 +313,7 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   one `pwrite` at 0 (no `rewind`/`fprintf`/`fflush`), `get` reads with `pread`. A failed write still
   rolls both files back (P0-4); Windows keeps the stdio path. Measured before and after (file and
   sync, three interleaved runs, medians) into `test/krx/BASELINE.md`.
-- 15.2 [2] No seqnums write for a sent message the body already records: skipped when the next
+- 15.2 [2] **Dropped (owner, 14 Nov 2026)**: a small gain only in file mode, not worth the admin-reset risk. No seqnums write for a sent message the body already records: skipped when the next
   sender seqnum is the last stored message + 1; target changes are still written. On open the next
   sender seqnum is the larger of the seqnums file and the last header record + 1. Risk: a sender
   seqnum set lower on purpose (an admin reset) looks like a stale file; proposal: lowering also
@@ -342,6 +349,14 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   returns all or none). No extra thread; `send()` keeps its meaning and its per-message sync. The
   gateway drains each session's order queue into one call from one sender thread, never waiting to
   fill a batch, at most `MAX_BATCH` (proposed 64) a call (Phase 10). Red first (rows 15.15–15.17).
+- 15.8 *Parked idea (owner, 14 Nov 2026), not planned:* FileStore's offsets index as a `std::deque`
+  of 16-byte slots indexed by `seqnum − first`, instead of a `std::map` node (64 B and one `malloc`)
+  per stored message. Found by the 8.5 soak profile: memory grows 64 B per stored message, freed at
+  reset (about 64 MB per session for a 1 M-message day; 8.5 accepts it). Gains: about 4× less
+  memory, no `malloc` per send. Costs: a high-risk FileStore change; tests for overwrites
+  (`insert_or_assign` on send, `insert` keeps the first on reload), a seqnum lowered below the
+  first slot, `get` across empty slots, reload; a large seqnum jump costs 16 B per empty slot.
+  Measure with `krx_bench` before deciding.
 
 **Spike results (13 Nov 2026, U-17; numbers in `test/krx/BASELINE.md`).** Measured on Linux in the
 lab cluster (a pod in namespace `krx-bench`, store on a node's consumer NVMe) and on the Mac with
@@ -680,8 +695,8 @@ need no change.
 - This decision was Q17 until 14 Nov 2026; renumbered Q18 (owner) because open PR #65
   (`agent/v1-p8i`) took Q17 for the resend range. `docs/V1_PLAN.md` conflicts with #62 and #65:
   whichever merges second resolves it (both add rows to Decisions, Progress and Handover notes).
-- 15.2 (skip the seqnums write the body already records): still open; small gain in file mode, some
-  risk around admin resets; proposal: drop it.
+- 15.2 (skip the seqnums write the body already records): dropped (owner, 14 Nov 2026); small gain
+  in file mode, some risk around admin resets.
 - 11.7 on the production disk (likely XFS): sync cost and flush cost decide the batch cap and
   interval.
 - Production uses background flush: Phases 9–10 need only the `FileStoreFlushInterval` setting

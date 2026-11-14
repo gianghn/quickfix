@@ -21,7 +21,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <future>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -705,6 +707,95 @@ SCENARIO("Every connection accepted while the acceptor stops is closed by the st
       THEN("none of them is left open") {
         INFO(left_open << " connections still open after the stop");
         REQUIRE((left_open == 0));
+      }
+    }
+  }
+}
+
+namespace {
+// The descriptors the process has open (0..4095).
+std::set<int> OpenSet() {
+  std::set<int> open;
+  for (int descriptor = 0; descriptor < 4096; ++descriptor) {
+    struct stat status{};
+    if (fstat(descriptor, &status) == 0) {
+      open.insert(descriptor);
+    }
+  }
+  return open;
+}
+
+// Files on /dev/null until one gets `descriptor` (the lowest free number is taken each time).
+class Placeholders {
+ public:
+  explicit Placeholders(int descriptor) {
+    while (files_.size() < 64) {
+      std::FILE* file = std::fopen("/dev/null", "r");
+      if (file == nullptr) {
+        return;
+      }
+      files_.push_back(file);
+      if (::fileno(file) >= descriptor) {
+        return;
+      }
+    }
+  }
+
+  ~Placeholders() {
+    for (std::FILE* file : files_) {
+      std::fclose(file);
+    }
+  }
+
+  Placeholders(const Placeholders&) = delete;
+  Placeholders& operator=(const Placeholders&) = delete;
+  Placeholders(Placeholders&&) = delete;
+  Placeholders& operator=(Placeholders&&) = delete;
+
+  [[nodiscard]] bool Holds(int descriptor) const {
+    return std::ranges::any_of(
+        files_, [descriptor](std::FILE* file) { return ::fileno(file) == descriptor; });
+  }
+
+ private:
+  std::vector<std::FILE*> files_;
+};
+
+// The listening descriptor a start() opens: what is open after it and was not before.
+int ListenerOf(FIX::ThreadedSocketAcceptor& acceptor) {
+  const std::set<int> before = OpenSet();
+  acceptor.start();
+  for (const int descriptor : OpenSet()) {
+    if (!before.contains(descriptor)) {
+      return descriptor;
+    }
+  }
+  return -1;
+}
+}  // namespace
+
+// Row U-8 (8.4, TSan seed 7): the acceptor kept every listening socket number it ever had. After a
+// stop and start, onStart accepted on the old numbers, and onStop closed outright any connection
+// that had been given one of them, under its reading thread (then its own close came again).
+SCENARIO("A restarted acceptor listens and closes only its own sockets", "[krx][v1][u-8]") {
+  GIVEN("an acceptor stopped once, its old listening number now a file") {
+    const std::vector<int> ports = FreePorts(1);
+    const FIX::SessionSettings settings = AcceptorOn(ports);
+    FIX::NullApplication application;
+    FIX::MemoryStoreFactory store;
+    krx::EventLogFactory logs;
+    FIX::ThreadedSocketAcceptor acceptor(application, store, settings, logs);
+    const int listener = ListenerOf(acceptor);
+    acceptor.stop(true);
+    const Placeholders placeholders(listener);
+    REQUIRE((listener >= 0 && placeholders.Holds(listener)));
+    WHEN("it starts again") {
+      acceptor.start();
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      acceptor.stop(true);
+      THEN("it never accepts on the old number") {
+        INFO("events:\n" << logs.Events().Dump());
+        REQUIRE((!logs.Events().Contains("Accept failed")));
       }
     }
   }

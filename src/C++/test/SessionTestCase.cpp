@@ -2991,3 +2991,71 @@ TEST_CASE_METHOD(initiatorFIX40Fixture, "customFIX40_UnsupportedMessageType_ERRe
   object->next( executionReport, now );
   CHECK(1 == toReject);
 }
+
+namespace
+{
+  // KRX fork (Q17): a store whose get adds to what the vector already holds. The interface does
+  // not say get clears it, so a resend read in chunks must clear it itself.
+  struct AppendingStore : public MemoryStore
+  {
+    using MemoryStore::MemoryStore;
+
+    void get( int begin, int end, std::vector < std::string > & messages ) const
+    EXCEPT ( IOException ) override
+    {
+      std::vector < std::string > read;
+      MemoryStore::get( begin, end, read );
+      messages.insert( messages.end(), read.begin(), read.end() );
+    }
+  };
+
+  struct AppendingStoreFactory : public MessageStoreFactory
+  {
+    MessageStore* create( const UtcTimeStamp& now, const SessionID& ) override
+    {
+      return std::make_unique<AppendingStore>( now ).release();
+    }
+
+    void destroy( MessageStore* store ) override
+    {
+      std::unique_ptr<MessageStore> owned( store );
+    }
+  };
+}
+
+TEST_CASE_METHOD(initiatorFixture, "resendAcrossChunksSendsEachMessageOnce")
+{
+  SessionID sessionID( BeginString( "FIX.4.2" ),
+                      SenderCompID( "TW" ), TargetCompID( "ISLD" ) );
+  TimeRange sessionTime( startTime, endTime, 0, 31 );
+  DataDictionaryProvider provider;
+  provider.addTransportDataDictionary( sessionID.getBeginString(), FIX::TestSettings::pathForSpec("FIX42") );
+  AppendingStoreFactory appendingFactory;
+
+  destroySession();
+  object = std::make_unique<Session>( [this](){ return now; }, *this, appendingFactory, sessionID,
+                                      provider, sessionTime, 1, nullptr ).release();
+  object->setResponder( this );
+
+  FIX::Message sentLogon = createLogon( "TW", "ISLD", 1 );
+  object->send(sentLogon);
+  object->next( now );
+  object->logon();
+  FIX::Message receivedLogon = createLogon( "ISLD", "TW", 1 );
+  object->next(receivedLogon, now);
+
+  // 1500 orders after the Logons: resent from 1 to the last, they cross the first 1000-message chunk.
+  for( int seq = 2; seq <= 1501; ++seq )
+  {
+    FIX::Message order = createNewOrderSingle( "ISLD", "TW", seq );
+    object->send( order );
+  }
+  const int nextSender = object->getExpectedSenderNum();
+
+  FIX::Message resendReq = createResendRequest( "ISLD", "TW", 2, 1, 0 );
+  object->next( resendReq, now );
+
+  CHECK( 1500 == resent );
+  CHECK( nextSender == object->getExpectedSenderNum() );
+  destroySession();
+}
