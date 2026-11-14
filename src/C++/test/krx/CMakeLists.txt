@@ -4,7 +4,8 @@
 add_executable(krx_ut HarnessScenarios.cpp DictionaryScenarios.cpp FieldAccessScenarios.cpp
   TypedHeaderScenarios.cpp PlainAcceptorScenarios.cpp InboundFramingScenarios.cpp
   SocketLivenessScenarios.cpp TeardownRaceScenarios.cpp StoreDurabilityScenarios.cpp
-  SendTruthScenarios.cpp UpstreamPicksScenarios.cpp SessionPair.cpp FixInput.cpp)
+  SendTruthScenarios.cpp UpstreamPicksScenarios.cpp StoreThroughputScenarios.cpp SessionPair.cpp
+  FixInput.cpp)
 target_include_directories(krx_ut SYSTEM PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src/C++)
 target_link_libraries(krx_ut PRIVATE ${PROJECT_NAME} krx_catch)
 target_compile_features(krx_ut PRIVATE cxx_std_23)

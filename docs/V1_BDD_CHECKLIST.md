@@ -157,6 +157,32 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] 11.7 | A power-off during a burst ends, after restart, in a state that matches the exchange | 11.5 |
 | [ ] 11.8 | Running out of files, memory or CPU degrades the gateway with alerts, never silently | 11.6 |
 
+## 15. Store throughput — Phase 15 (src/C++/test/krx/StoreThroughputScenarios.cpp)
+
+Rows 15.1–15.3 guard a change that must not change behaviour (they pass before and after 15.1; its
+evidence is U-16). Rows 15.7–15.11 were for 15.3 and 15.4, which Q18 (14 Nov 2026) did not pick;
+rows 15.12–15.17 are for its choice, 15.6 and 15.7.
+
+| # | Scenario | Plan |
+|---|---|---|
+| [ ] 15.1 | Messages stored while earlier ones are read back (a resend during order flow) all read back whole, and a restart loads every one with the same next seqnums | 15.1 |
+| [ ] 15.2 | After a failed write, the next message is stored right after the last good one, and a restart loads every good message | 15.1 |
+| [ ] 15.3 | After every update the seqnums file holds the last sender and target seqnums in its existing format | 15.1 |
+| [ ] 15.4 | A restart after sent messages whose seqnums were not written resumes at the last stored message + 1 | 15.2 |
+| [ ] 15.5 | A sender seqnum set lower than the last stored message survives a restart | 15.2 |
+| [ ] 15.6 | A received message still moves the target seqnum on file | 15.2 |
+| [–] 15.7 | With decoupled sync, no message reaches the exchange before it is on disk — not built: Q18 | 15.3 |
+| [–] 15.8 | With decoupled sync, a sync that fails after `send()` returned disconnects the session with an error logged, and the message never reaches the exchange — not built: Q18 | 15.3 |
+| [–] 15.9 | With decoupled sync, messages reach the exchange in seqnum order — not built: Q18 | 15.3 |
+| [–] 15.10 | With shared sync and several senders on one session, each `send()` returns only once its message is on disk and written, with fewer syncs than messages — not built: Q18 | 15.4 |
+| [–] 15.11 | With shared sync, a failed sync fails every waiting sender and disconnects the session once — not built: Q18 | 15.4 |
+| [ ] 15.12 | Without store sync, every message stored more than one flush interval ago is on disk, while the session keeps sending | 15.6 |
+| [ ] 15.13 | Without store sync, a flush that fails disconnects the session with an error logged | 15.6 |
+| [ ] 15.14 | Stopping a session with background flush running ends its flusher, and nothing it stored is left unflushed | 15.6 |
+| [ ] 15.15 | With store sync, a batch of orders costs one sync and reaches the exchange whole and in order | 15.7 |
+| [ ] 15.16 | With store sync, no order of a batch reaches the exchange before the batch is on disk, and a failed sync sends none of them and disconnects | 15.7 |
+| [ ] 15.17 | When the connection fails in the middle of a batch, the result says which orders went out | 15.7 |
+
 ## Outside the suite
 
 | # | Check | Plan |
@@ -176,6 +202,8 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [ ] U-12 | Nightly p99.9 regression job ≤ 10 % | 11.8 |
 | [ ] U-13 | checksec passes on the release build; no p99 regression from hardening flags | 12.2 |
 | [ ] U-14 | Build reproducible from signed tag `krx-1.0.0`; SBOM with both SHAs; no open high or critical CVE | 12.3, 12.4 |
+| [ ] U-16 | Fewer store system calls measured: `krx_bench` file and sync before and after (medians of 3 interleaved runs), no p50/p99.9 regression over 10 %: `test/krx/BASELINE.md` | 15.1 |
+| [x] U-17 | The 15.3 and 15.4 spikes measured (throughput, p50/p99.9, syncs per message; 15.4 at 1, 2, 4, 8 senders) with their risks, in the plan for Q18 | 15.3, 15.4 |
 
 ## Security
 

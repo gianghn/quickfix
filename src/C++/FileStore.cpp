@@ -29,6 +29,7 @@
 #include "Utility.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -71,6 +72,27 @@ std::size_t frameAt( const std::string& data, std::size_t pos, int& msgSeqNum )
   std::size_t seqNumStart = seqNumTag + 4;
   msgSeqNum = seqNumTag == std::string::npos ? 0 : static_cast<int>( digitsAt( frame, seqNumStart ) );
   return end - pos;
+}
+
+// KRX fork (15.1): writes `data` at `offset` of `file` and hands it to the operating system, in one
+// system call where there is pwrite (no seek, no stdio buffer). False when not all of it was written.
+bool writeAt( FILE* file, std::int64_t offset, const std::string& data )
+{
+#ifdef _MSC_VER
+  return fseek( file, static_cast<long>( offset ), SEEK_SET ) == 0
+    && fwrite( data.data(), sizeof( char ), data.size(), file ) == data.size()
+    && fflush( file ) != EOF;
+#else
+  return pwrite( fileno( file ), data.data(), data.size(), offset ) == static_cast<ssize_t>( data.size() );
+#endif
+}
+
+// KRX fork (15.1): `value` as printf's "%10.10d" writes it: at least ten digits, zero-padded.
+std::string tenDigits( int value )
+{
+  std::string digits = std::to_string( std::abs( static_cast<std::int64_t>( value ) ) );
+  digits.insert( 0, 10 - digits.size(), '0' ); // an int has at most ten digits
+  return value < 0 ? "-" + digits : digits;
 }
 }
 
@@ -168,6 +190,9 @@ void FileStore::open( bool deleteFile )
   if ( setCreationTime ) setSession();
 
   recoverUnindexed(); // KRX fork (P0-5)
+  // KRX fork (15.1): set() appends at these ends, kept here instead of seeking for them each time.
+  m_msgEnd = static_cast<std::int64_t>( std::filesystem::file_size( m_msgFileName ) );
+  m_headerEnd = static_cast<std::int64_t>( std::filesystem::file_size( m_headerFileName ) );
   setNextSenderMsgSeqNum( getNextSenderMsgSeqNum() );
   setNextTargetMsgSeqNum( getNextTargetMsgSeqNum() );
 }
@@ -252,35 +277,27 @@ EXCEPT ( IOException )
 {
   if ( !m_msgFile || !m_headerFile )
     throw IOException( "Store files are not open: " + m_msgFileName );
-  if ( fseek( m_msgFile, 0, SEEK_END ) )
-    throw IOException( "Cannot seek to end of " + m_msgFileName );
-  if ( fseek( m_headerFile, 0, SEEK_END ) )
-    throw IOException( "Cannot seek to end of " + m_headerFileName );
-
-  long offset = ftell( m_msgFile );
-  if ( offset < 0 )
-    throw IOException( "Unable to get file pointer position from " + m_msgFileName );
-  const auto headerEnd = ftell( m_headerFile );
-  if ( headerEnd < 0 )
-    throw IOException( "Unable to get file pointer position from " + m_headerFileName );
+  const std::int64_t offset = m_msgEnd;
+  const std::int64_t headerEnd = m_headerEnd;
   std::size_t size = msg.size();
 
-  // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each flushed;
-  // the message is in m_offsets only once both are on file. Any failure puts both files back.
-  // P0-5: with FileStoreSync the body is on disk before the header record is written.
+  // KRX fork (P0-4): the body first, then its header record ("seqnum,offset,size "), each handed to
+  // the operating system; the message is in m_offsets only once both are on file. Any failure puts
+  // both files back. P0-5: with FileStoreSync the body is on disk before the header record is
+  // written. 15.1: each is one write at the end offset kept in memory.
   // Named error strings: Mull reads a temporary's destructor as the call (MAINTENANCE §5).
   const std::string bodyError = "Unable to write or sync file " + m_msgFileName;
-  if ( fwrite( msg.data(), sizeof( char ), size, m_msgFile ) != size || fflush( m_msgFile ) == EOF
-       || ( m_sync && !syncedToDisk( m_msgFile ) ) )
+  if ( !writeAt( m_msgFile, offset, msg ) || ( m_sync && !syncedToDisk( m_msgFile ) ) )
     rollBack( offset, headerEnd, bodyError );
   const std::string record = std::to_string( msgSeqNum ) + "," + std::to_string( offset ) + ","
     + std::to_string( size ) + " ";
   const std::string headerError = "Unable to write to file " + m_headerFileName;
-  if ( fwrite( record.data(), sizeof( char ), record.size(), m_headerFile ) != record.size()
-       || fflush( m_headerFile ) == EOF )
+  if ( !writeAt( m_headerFile, headerEnd, record ) )
     rollBack( offset, headerEnd, headerError );
 
-  m_offsets.insert_or_assign( msgSeqNum, std::make_pair( offset, size ) );
+  m_msgEnd = offset + static_cast<std::int64_t>( size );
+  m_headerEnd = headerEnd + static_cast<std::int64_t>( record.size() );
+  m_offsets.insert_or_assign( msgSeqNum, OffsetSize( static_cast<OffsetSize::first_type>( offset ), size ) );
   return true;
 }
 
@@ -386,13 +403,11 @@ void FileStore::refresh() EXCEPT ( IOException )
 
 void FileStore::setSeqNum()
 {
-  rewind( m_seqNumsFile );
-  fprintf( m_seqNumsFile, "%10.10d : %10.10d",
-           getNextSenderMsgSeqNum(), getNextTargetMsgSeqNum() );
-  if ( ferror( m_seqNumsFile ) ) 
+  // KRX fork (15.1): one write at the start ("%10.10d : %10.10d", the format populateCache reads).
+  const std::string seqNums
+    = tenDigits( getNextSenderMsgSeqNum() ) + " : " + tenDigits( getNextTargetMsgSeqNum() );
+  if ( !writeAt( m_seqNumsFile, 0, seqNums ) )
     throw IOException( "Unable to write to file " + m_seqNumsFileName );
-  if ( fflush( m_seqNumsFile ) )
-    throw IOException( "Unable to flush file " + m_seqNumsFileName );
   // KRX fork (P0-5): the body rebuilds the next sender seqnum up to its last message, so only a
   // seqnum past it (PersistMessages=N, a reset) needs a sync; the target seqnum never does.
   const int lastStored = m_offsets.empty() ? 0 : m_offsets.rbegin()->first;

@@ -4,6 +4,8 @@
 //   ping-pong:  the acceptor echoes each order; round trip from the steady-clock nanoseconds the
 //               order carries in Text(58). Prints p50/p99/p99.9/max.
 // Usage: krx_bench [mem|file|sync] [orders=200000] [round_trips=20000] [port=7800] [workdir]
+//                  [senders=1]
+//   senders: threads sending the throughput orders on the one session at once (plan item 15.4).
 //   sync: the file store with FileStoreSync=Y (plan item 4.4).
 // Numbers from a shared machine are rough; compare runs on the same machine only.
 #include <algorithm>
@@ -99,6 +101,7 @@ struct Options {
   std::int64_t round_trips = 20000;
   int port = 7800;
   std::filesystem::path workdir = "bench_work";
+  int senders = 1;
 };
 
 Options Parse(std::span<char*> args) {
@@ -119,6 +122,9 @@ Options Parse(std::span<char*> args) {
   }
   if (args.size() > 5) {
     options.workdir = args[5];
+  }
+  if (args.size() > 6) {
+    options.senders = std::max(1, std::stoi(args[6]));
   }
   return options;
 }
@@ -168,11 +174,20 @@ void WaitFor(const BenchApp& acceptor, std::int64_t count) {
   }
 }
 
-void Throughput(BenchApp& acceptor, const FIX::SessionID& id, std::int64_t orders) {
+// `senders` threads share `orders` and send them on the one session at once (plan item 15.4).
+void Throughput(BenchApp& acceptor, const FIX::SessionID& id, std::int64_t orders, int senders) {
   acceptor.ResetReceived();
   const auto start = Clock::now();
-  for (std::int64_t number = 0; number < orders; ++number) {
-    Send(number, id);
+  {
+    std::vector<std::jthread> threads;
+    threads.reserve(static_cast<std::size_t>(senders));
+    for (int sender = 0; sender < senders; ++sender) {
+      threads.emplace_back([sender, senders, orders, &id] {
+        for (std::int64_t number = sender; number < orders; number += senders) {
+          Send(number, id);
+        }
+      });
+    }
   }
   const std::chrono::duration<double> sending = Clock::now() - start;
   WaitFor(acceptor, orders);
@@ -241,13 +256,14 @@ int Run(std::span<char*> args) {
   if (options.sync) {
     store = "file+sync";
   }
-  std::cout << std::format("store={} hw_threads={}\n", store, std::thread::hardware_concurrency());
+  std::cout << std::format("store={} senders={} hw_threads={}\n", store, options.senders,
+                           std::thread::hardware_concurrency());
   const FIX::SessionID id("FIX.4.4", "CLI", "SRV");
   for (std::int64_t number = 0; number < kWarmup; ++number) {
     Send(number, id);
   }
   WaitFor(acceptor_app, kWarmup);
-  Throughput(acceptor_app, id, options.orders);
+  Throughput(acceptor_app, id, options.orders, options.senders);
   PingPong(acceptor_app, initiator_app, id, options.round_trips);
   initiator.stop();
   acceptor.stop();
