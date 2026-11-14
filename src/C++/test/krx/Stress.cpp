@@ -583,11 +583,12 @@ class EventFileLog : public FIX::Log {
 
   void onOutgoing(const std::string& /*message*/) override {}
 
+  // Buffered: a flush per event (a write per resent message) slowed a large resend until the
+  // counterparty's send timed out. The file is complete once the engines are gone.
   void onEvent(const std::string& text) override {
     const std::scoped_lock lock(mutex_);
     file_ << FIX::UtcTimeStampConvertor::convert(FIX::UtcTimeStamp::now(), 6) << " : " << text
           << '\n';
-    file_.flush();
   }
 
  private:
