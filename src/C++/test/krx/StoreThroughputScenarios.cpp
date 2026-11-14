@@ -105,23 +105,14 @@ bool FlushedSoon(const FIX::MessageStore* store) {
   return SyncsOf(store) > 0;
 }
 
-// A store whose every sync fails, as a disk that returns EIO would (row 15.13). It stops its
-// flusher itself, before its own part is destroyed.
+// A store whose every background flush fails, as a disk that returns EIO would (row 15.13).
 class FailingFlushStore : public FIX::FileStore {
  public:
   explicit FailingFlushStore(const krx::TempDir& dir)
       : FIX::FileStore(FIX::UtcTimeStamp::now(), dir.Path().string(), StoreSession(), false,
-                       kFlushMs) {}
-
-  ~FailingFlushStore() override { stopFlusher(); }
-
-  FailingFlushStore(const FailingFlushStore&) = delete;
-  FailingFlushStore& operator=(const FailingFlushStore&) = delete;
-  FailingFlushStore(FailingFlushStore&&) = delete;
-  FailingFlushStore& operator=(FailingFlushStore&&) = delete;
-
- protected:
-  bool syncFile(int /*fd*/) override { return false; }
+                       kFlushMs) {
+    setFlushSync([](int /*fd*/) { return false; });
+  }
 };
 
 // Stores messages from `first` on in `store` until one write throws or kFlushedWithin passes. The

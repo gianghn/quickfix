@@ -145,12 +145,13 @@ FileStore::FileStore( const UtcTimeStamp& now, std::string path, const SessionID
   {
     throw ConfigError( e.what() );
   }
+  m_flushSync = syncDescriptor; // KRX fork (15.6)
   m_constructed = true; // KRX fork (15.6): the flusher may start with the next write
 }
 
 FileStore::~FileStore()
 {
-  endFlusher( false ); // KRX fork (15.6)
+  endFlusher(); // KRX fork (15.6)
   if( m_msgFile ) fclose( m_msgFile );
   if( m_headerFile ) fclose( m_headerFile );
   if( m_seqNumsFile ) fclose( m_seqNumsFile );
@@ -464,7 +465,7 @@ void FileStore::markUnflushed()
 }
 
 // KRX fork (15.6): every interval, from a fixed tick (a slow flush does not stretch the next one),
-// flushes the store when anything was written since the last flush. Ends on stopFlusher().
+// flushes the store when anything was written since the last flush. Ends on endFlusher().
 void FileStore::flushLoop()
 {
   const auto interval = std::chrono::milliseconds( m_flushIntervalMs );
@@ -476,7 +477,7 @@ void FileStore::flushLoop()
     tick = std::max( tick + interval, std::chrono::steady_clock::now() );
     if ( m_flusherStop || !m_unflushed.exchange( false ) ) continue;
     lock.unlock();
-    const bool flushed = flushOnce( true );
+    const bool flushed = flushOnce();
     lock.lock();
     if ( !flushed && !m_flushFailed.load() )
     {
@@ -488,8 +489,7 @@ void FileStore::flushLoop()
 
 // KRX fork (15.6): syncs copies of the body and seqnums descriptors, taken under m_flushMutex, so
 // open() or rollBack() may replace the files meanwhile and a write never waits for the sync.
-// `viaOverride`: through syncFile (false in the destructor, where a subclass's is gone).
-bool FileStore::flushOnce( bool viaOverride )
+bool FileStore::flushOnce()
 {
   int body = -1;
   int seqNums = -1;
@@ -501,8 +501,8 @@ bool FileStore::flushOnce( bool viaOverride )
       seqNums = dup( fileno( m_seqNumsFile ) );
     }
   }
-  const bool bodySynced = syncCopy( body, viaOverride );
-  const bool seqNumsSynced = syncCopy( seqNums, viaOverride );
+  const bool bodySynced = syncCopy( body );
+  const bool seqNumsSynced = syncCopy( seqNums );
   if ( bodySynced ) ++m_syncCount;
   if ( seqNumsSynced ) ++m_syncCount;
   return bodySynced && seqNumsSynced;
@@ -510,22 +510,22 @@ bool FileStore::flushOnce( bool viaOverride )
 
 // KRX fork (15.6): syncs and closes a descriptor copy from flushOnce. -1 (the files were closed, or
 // dup failed; dup returns exactly -1 then) is a failed sync, so the flush fails closed.
-bool FileStore::syncCopy( int fd, bool viaOverride )
+bool FileStore::syncCopy( int fd )
 {
   if ( fd == -1 ) return false;
-  const bool synced = viaOverride ? syncFile( fd ) : syncDescriptor( fd );
+  const bool synced = m_flushSync( fd );
   close( fd );
   return synced;
 }
 
-void FileStore::stopFlusher()
+void FileStore::setFlushSync( bool ( *sync )( int fd ) )
 {
-  endFlusher( true );
+  m_flushSync = sync;
 }
 
 // KRX fork (15.6): stops and joins the flusher, then flushes the last writes before the files
-// close; `viaOverride` as for flushOnce.
-void FileStore::endFlusher( bool viaOverride )
+// close.
+void FileStore::endFlusher()
 {
   if ( !m_flusher.joinable() ) return;
   {
@@ -534,7 +534,7 @@ void FileStore::endFlusher( bool viaOverride )
   }
   m_flushWake.notify_all();
   m_flusher.join();
-  if ( m_unflushed.exchange( false ) ) flushOnce( viaOverride );
+  if ( m_unflushed.exchange( false ) ) flushOnce();
 }
 
 // KRX fork (P0-5): with FileStoreSync only the body is synced, so after a crash the header and
