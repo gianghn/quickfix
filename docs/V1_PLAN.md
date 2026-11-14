@@ -105,13 +105,13 @@ The owner may change any of these before its phase starts.
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | in progress: 8.1, 8.2, 8.5 fix, 8.7 in #57–#59; the long runs (8.3–8.6) on the lab cluster |
-| 9 | quickfix-rs fork fails closed | 9.1–9.5 | P0-9, Trap-3 | not started |
+| 9 | quickfix-rs fork fails closed | 9.1–9.6 | P0-9, Trap-3, Q18 | not started |
 | 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | not started |
 | 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | not started |
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
-| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | built on `agent/v1-p15a` (not yet merged): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 open (Handover 15) |
+| 15 | Store throughput | 15.0–15.7 | Q1 ("if the sync costs too much speed, we look at it again") | done (#66, #67, #68): 15.1, 15.6, 15.7; 15.3, 15.4 and a pre-size spike measured, not built; 15.2 dropped (Handover 15) |
 
 ### Next steps (13 Nov 2026)
 
@@ -228,6 +228,12 @@ Nothing else can be TDD'd until this exists.
 - 9.3 Compile-time `Send + Sync` assertion on the callback type; no `&Message` kept past a callback.
 - 9.4 Trap-3: pin the threaded classes explicitly; vendor `libquickfix` from the `krx-1.0.0` tag, not upstream master.
 - 9.5 Make `quickfix/tests/test_session.rs` reliable (unique session IDs per test, `&&` logon wait, no fixed sleeps), then `cargo-mutants` on the FFI callback module.
+- 9.6 Phase 15 into quickfix-rs (Q18, production is background flush):
+  - Pin `quickfix-ffi/libquickfix` at the `krx/main` head when 9.6 starts (`0275975e` or later: all of Phase 15). No binding change: `FileStoreFlushInterval` is a session setting that `FileStoreFactory` reads from the `.ini`, like `FileStoreSync`.
+  - Update `KRX_FORK_NOTES.md` (a new pin row), `quickfix/CHANGELOG.md` and `KRX_GATEWAY_HANDOVER.md` §3: its "`FileStoreSync=Y`" line becomes `FileStoreSync=N` with `FileStoreFlushInterval=5` (ms).
+  - What consumers see: one flusher thread per file store; about 10 ms of sent messages (p99, lab NVMe; 11.7 measures the production disk) can be lost on a host crash or power cut, so the Q1 runbook stays; a failed flush makes the next store write throw and the session disconnects (D7), as a failed sync does with `FileStoreSync=Y`.
+  - Test: a `test_session.rs` case runs a session with a file store and `FileStoreFlushInterval=5`, sends, and drops it cleanly (the flusher is joined).
+  - Batch send (15.7, `FileStoreSync=Y` only) gets no FFI binding unless production goes back to sync mode.
 
 ### Phase 10 — Gateway integration and conformance · **high** · `enCapital/krx_gateway_rust`
 
@@ -307,7 +313,7 @@ Items (the owner's numbering of 13 Nov 2026 in brackets):
   one `pwrite` at 0 (no `rewind`/`fprintf`/`fflush`), `get` reads with `pread`. A failed write still
   rolls both files back (P0-4); Windows keeps the stdio path. Measured before and after (file and
   sync, three interleaved runs, medians) into `test/krx/BASELINE.md`.
-- 15.2 [2] No seqnums write for a sent message the body already records: skipped when the next
+- 15.2 [2] **Dropped (owner, 14 Nov 2026)**: a small gain only in file mode, not worth the admin-reset risk. No seqnums write for a sent message the body already records: skipped when the next
   sender seqnum is the last stored message + 1; target changes are still written. On open the next
   sender seqnum is the larger of the seqnums file and the last header record + 1. Risk: a sender
   seqnum set lower on purpose (an admin reset) looks like a stale file; proposal: lowering also
@@ -634,8 +640,8 @@ need no change.
 - This decision was Q17 until 14 Nov 2026; renumbered Q18 (owner) because open PR #65
   (`agent/v1-p8i`) took Q17 for the resend range. `docs/V1_PLAN.md` conflicts with #62 and #65:
   whichever merges second resolves it (both add rows to Decisions, Progress and Handover notes).
-- 15.2 (skip the seqnums write the body already records): still open; small gain in file mode, some
-  risk around admin resets; proposal: drop it.
+- 15.2 (skip the seqnums write the body already records): dropped (owner, 14 Nov 2026); small gain
+  in file mode, some risk around admin resets.
 - 11.7 on the production disk (likely XFS): sync cost and flush cost decide the batch cap and
   interval.
 - Production uses background flush: Phases 9–10 need only the `FileStoreFlushInterval` setting
