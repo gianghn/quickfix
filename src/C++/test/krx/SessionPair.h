@@ -244,6 +244,8 @@ struct PairOptions {
   bool file_store_sync{false};  // that FileStore syncs to disk (FileStoreSync=Y)
   bool seqnum_fails{false};     // a SeqNumFailingStore (no FileStore)
   bool sync_fails{false};       // a SyncFailingFileStore in file_store_dir (sync on)
+  bool manual_reading{false};   // no reading thread: the test calls Pump() and Tick() (8.6)
+  bool check_latency{true};     // the session's CheckLatency (SendingTime within 2 minutes)
 };
 
 // An acceptor session on one end of a socketpair; a test plays the counterparty on the other end.
@@ -307,6 +309,17 @@ class SessionPair {
   // The gateway disconnects the session, as on stop() or a risk limit.
   void Disconnect() { session_.disconnect(); }
 
+  // The gateway asks for a logout; the session sends it on its next timer tick.
+  void Logout() { session_.logout(); }
+
+  // With manual_reading, on the caller's thread: the session reads and handles everything the
+  // counterparty wrote so far, and what it sent is kept for ReadFrame. False once the connection
+  // closed.
+  bool Pump();
+
+  // With manual_reading: the session's timers run now (heartbeat, test request, logout).
+  void Tick() { session_.next(FIX::UtcTimeStamp::now()); }
+
   // Waits until the session's reading thread has stopped, after the connection closed.
   void WaitReaderStopped() {
     if (reader_.joinable()) {
@@ -341,6 +354,11 @@ class SessionPair {
   std::unique_ptr<FIX::ThreadedSocketConnection> connection_;
   std::thread reader_;
   FIX::Parser parser_;
+  bool manual_reading_{false};
+  bool open_{true};  // with manual_reading: the connection's read() has not returned false yet
+
+  // What the session sent so far, into parser_ for ReadFrame, without waiting.
+  void KeepReplies();
 };
 
 // The MsgType (35) of a raw FIX frame; empty when the frame has none.
