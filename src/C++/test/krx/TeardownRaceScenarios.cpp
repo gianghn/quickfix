@@ -882,9 +882,10 @@ SCENARIO("An initiator stopped while it connects never keeps that connection rea
     FIX::MemoryStoreFactory store;
     FIX::ThreadedSocketAcceptor exchange(application, store, ExchangeOn(port));
     exchange.start();
-    // Each stop waits up to 1 s for the initiator's connect loop; before the fix round 0 hung.
-    WHEN("the gateway starts its initiator and force-stops it as it connects, 10 times") {
-      const int slow = FirstSlowStop(exchange, port, 10, std::chrono::seconds(3));
+    // Each stop waits up to 1 s for the initiator's connect loop; before the fix round 0 hung, so
+    // 3 rounds keep the scenario short enough for the Mull build's 60 s krx_ut limit.
+    WHEN("the gateway starts its initiator and force-stops it as it connects, 3 times") {
+      const int slow = FirstSlowStop(exchange, port, 3, std::chrono::seconds(3));
       THEN("every stop returns within 3 seconds") {
         INFO("round " << slow << " took longer");
         REQUIRE((slow == -1));
