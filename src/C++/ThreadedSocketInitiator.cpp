@@ -218,7 +218,9 @@ THREAD_PROC ThreadedSocketInitiator::socketThread( void* p )
 
   pInitiator->lock();
 
-  if( !pConnection->connect() )
+  // KRX fork (R-P1-7): onStop's shutdown() can come before this connect(), when it does nothing,
+  // so a stopped initiator neither connects nor keeps reading (read() wakes once a second).
+  if( pInitiator->isStopped() || !pConnection->connect() )
   {
     pInitiator->getLog()->onEvent( "Connection failed" );
     pInitiator->releaseConnection( socket, pConnection );
@@ -231,7 +233,7 @@ THREAD_PROC ThreadedSocketInitiator::socketThread( void* p )
 
   pSession->next( UtcTimeStamp::now() );
 
-  while ( pConnection->read() ) {}
+  while ( !pInitiator->isStopped() && pConnection->read() ) {}
 
   pInitiator->releaseConnection( socket, pConnection );
   pInitiator->setDisconnected( sessionID );

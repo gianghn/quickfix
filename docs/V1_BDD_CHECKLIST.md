@@ -96,6 +96,7 @@ quickfix-rs rows are `cargo test`; gateway rows are Gherkin in
 | [x] 6.4 | `onLogout` runs after the session lock is released | 6.4 |
 | [x] 6.5 | Repeated forced and graceful acceptor stops never hang and never close a foreign file | 6.5 |
 | [x] 6.6 | A connection that fails to attach to its session leaves the session free for the next one | 6.6 |
+| [x] 6.7 | An initiator stopped while it connects never keeps that connection reading, so the stop returns (red on macOS only: Linux already closes such a connection) | quickfix-rs R-P1-7 |
 
 ## 7. Upstream picks — Phase 7 (src/C++/test/krx/UpstreamPicksScenarios.cpp, plus upstream tests)
 

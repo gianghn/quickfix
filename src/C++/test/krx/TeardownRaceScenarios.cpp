@@ -358,13 +358,16 @@ class SilentExchange {
   std::thread thread_;
 };
 
-// Settings for the gateway's threaded initiator (KRXGWI to KRXEXCH) connecting to `port`.
-FIX::SessionSettings InitiatorTo(int port) {
+// Settings for the gateway's threaded initiator (KRXGWI to KRXEXCH) connecting to `port`;
+// `extra_settings` go into [DEFAULT].
+FIX::SessionSettings InitiatorTo(int port, const std::string& extra_settings = "") {
   std::istringstream stream(
       "[DEFAULT]\nConnectionType=initiator\nSocketConnectHost=127.0.0.1\nSocketConnectPort=" +
       std::to_string(port) +
       "\nHeartBtInt=30\nReconnectInterval=1\nStartTime=00:00:00\nEndTime=00:00:00\n"
-      "UseDataDictionary=N\n[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGWI\n"
+      "UseDataDictionary=N\n" +
+      extra_settings +
+      "[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGWI\n"
       "TargetCompID=KRXEXCH\n");
   FIX::SessionSettings settings;
   stream >> settings;
@@ -826,6 +829,68 @@ SCENARIO("A forced initiator stop waiting for the exchange to log out does not s
              << " ms CPU");
         REQUIRE((cpu < std::chrono::milliseconds(500)));
       }
+    }
+  }
+}
+
+// Row 6.7 (quickfix-rs R-P1-7, its reset chaos): stop() wakes each connection thread by shutting
+// its socket down, but a thread that connected after that shutdown was never woken. Its session,
+// not yet connected when stop() began, was not logged out either, so it logged on and the stop
+// waited for it for ever.
+namespace {
+// Settings for the exchange's threaded acceptor (KRXEXCH to KRXGWI) on `port`.
+FIX::SessionSettings ExchangeOn(int port) {
+  std::istringstream stream(
+      "[DEFAULT]\nConnectionType=acceptor\nSocketReuseAddress=Y\nStartTime=00:00:00\n"
+      "EndTime=00:00:00\nUseDataDictionary=N\n[SESSION]\nBeginString=FIX.4.4\n"
+      "SenderCompID=KRXEXCH\nTargetCompID=KRXGWI\nSocketAcceptPort=" +
+      std::to_string(port) + "\n");
+  FIX::SessionSettings settings;
+  stream >> settings;
+  return settings;
+}
+
+// Starts an initiator to `exchange` on `port` and force-stops it a little later, `rounds` times;
+// the round whose stop took longer than `limit`, or -1. That stop is then ended by stopping the
+// exchange, so a red run fails instead of hanging.
+int FirstSlowStop(FIX::ThreadedSocketAcceptor& exchange, int port, int rounds,
+                  std::chrono::milliseconds limit) {
+  // A new initiator starts its sequence numbers at 1; the exchange resets to them.
+  const FIX::SessionSettings settings = InitiatorTo(port, "ResetOnLogon=Y\n");
+  FIX::NullApplication application;
+  FIX::MemoryStoreFactory store;
+  for (int round = 0; round < rounds; ++round) {
+    FIX::ThreadedSocketInitiator initiator(application, store, settings);
+    initiator.start();
+    std::this_thread::sleep_for(std::chrono::microseconds(100 * (round % 10)));
+    auto stopped = std::async(std::launch::async, [&initiator] { initiator.stop(true); });
+    if (stopped.wait_for(limit) != std::future_status::ready) {
+      exchange.stop(true);
+      stopped.get();
+      return round;
+    }
+  }
+  return -1;
+}
+}  // namespace
+
+SCENARIO("An initiator stopped while it connects never keeps that connection reading",
+         "[krx][v1][r-p1-7]") {
+  GIVEN("an exchange that accepts the gateway's logon") {
+    const int port = FreePort();
+    FIX::NullApplication application;
+    FIX::MemoryStoreFactory store;
+    FIX::ThreadedSocketAcceptor exchange(application, store, ExchangeOn(port));
+    exchange.start();
+    // Each stop waits up to 1 s for the initiator's connect loop; before the fix round 0 hung, so
+    // 3 rounds keep the scenario short enough for the Mull build's 60 s krx_ut limit.
+    WHEN("the gateway starts its initiator and force-stops it as it connects, 3 times") {
+      const int slow = FirstSlowStop(exchange, port, 3, std::chrono::seconds(3));
+      THEN("every stop returns within 3 seconds") {
+        INFO("round " << slow << " took longer");
+        REQUIRE((slow == -1));
+      }
+      exchange.stop(true);
     }
   }
 }
