@@ -105,9 +105,9 @@ The owner may change any of these before its phase starts.
 | 6 | Race-free teardown and locking | 6.1–6.6 | P0-11, P1-1, P1-2, P1-7, P2-3 | done (#46–#50; 6.3 itself #28, #29) |
 | 7 | Upstream cherry-picks and hygiene | 7.1–7.7 | P1-5, P1-6, P1-8, P2-1, P2-2 | done (#51–#55); 7.3 and 7.4 not needed (Q5, Q6) |
 | 8 | Sequence-gap root cause and long runs | 8.1–8.7 | P0-10, concurrency and fuzzing groups | code merged (#57–#61, #63–#65, #70, #71; Handover 8): 8.1, 8.2, 8.5, 8.6, 8.7 done; 8.3 and 8.4 results in Handover 8 |
-| 9 | quickfix-rs fork fails closed | 9.1–9.6 | P0-9, Trap-3, Q18 | done in quickfix-rs's own go-live phases (`krx/main` `462737c`, 0.4.2, C++ pin `fc866418`): 9.1–9.3, 9.6; 9.4's tag waits for 12.3; 9.5 not checked |
-| 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | mostly built by the gateway's own plan (`docs/golive/GO_LIVE_PLAN.md`, `main` `ac132f2`, 15 Nov 2026): 10.1, 10.3 done; 10.2, 10.6, 10.7 mostly; 10.4, 10.8 partly; 10.5 not started (status under Phase 10) |
-| 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | not started |
+| 9 | quickfix-rs fork fails closed | 9.1–9.6 | P0-9, Trap-3, Q18 | done in quickfix-rs's own go-live phases (`krx/main` `916b5c3`, 0.4.2, C++ pin `82177bd5` with R-P1-7, #73): 9.1–9.3, 9.6; 9.4's tag waits for 12.3; 9.5 not checked |
+| 10 | Gateway integration and conformance | 10.1–10.8 | P0-6, P0-8, P1-2, conformance group | mostly built by the gateway's own plan (`docs/golive/GO_LIVE_PLAN.md`, `main` `566f9fa`, 17 Nov 2026): 10.1, 10.2, 10.3 done; 10.5, 10.6, 10.7 mostly (the HOSE FAT suite, #93–#99 and its fixes #101, in review); 10.4, 10.8 partly (status under Phase 10) |
+| 11 | Fault injection and performance | 11.1–11.8 | fault and performance groups | started in the gateway: 11.1 (exchange link cut, #92), 11.7 (open burst and the V1.1 speed plan's baseline); the rest not started (status under Phase 11) |
 | 12 | Fork release and governance | 12.1–12.7 | governance, build hardening | not started |
 | 13 | Operations, HA, security and compliance | 13.1–13.8 | ops, HA, security, regulatory groups | not started |
 | 14 | Certification and go-live | 14.1–14.6 | certification, go-live groups | not started |
@@ -246,30 +246,36 @@ Nothing else can be TDD'd until this exists.
 - 10.7 KRX schedule: ATO 09:00–09:15, lunch 11:30–13:00 with the session up, ATC 14:30–14:45, put-through to 15:00, periodic call auctions, halt resumption, MTL orders, amend rule.
 - 10.8 Pre-trade controls (price collar, ceiling/floor, max qty/value, throttles below the HOSE limit, duplicate detection, foreign room, restricted list) and a two-layer kill switch, each with test evidence.
 
-**Status, 15 Nov 2026.** The gateway builds these under its own plan, `docs/golive/GO_LIVE_PLAN.md`, with its own item IDs (P0-n, P1-n, P2-n, F-n) and owner decisions (D1–D16, QF-1–QF-5). Where those decisions differ from the items above, the gateway's decisions stand. The gateway's `main` is at `1b7b44b`. It vendors quickfix-rs `807a852` (0.4.1, C++ `fc866418`); its move to 0.4.2 (`462737c`, same C++ pin: speed and lint only, including the header speed-up the gateway asked for) is on branch `agent/v1-quickfix-0-4-2`, definition of done passed. The C++ engine has not changed since `fc866418`, so the gateway already runs every engine fix from Phases 2–8 and 15.
+**Status, 17 Nov 2026.** The gateway builds these under its own plan, `docs/golive/GO_LIVE_PLAN.md`, with its own item IDs (P0-n, P1-n, P2-n, F-n) and owner decisions (D1–D16, QF-1–QF-5). Where those decisions differ from the items above, the gateway's decisions stand. The gateway's `main` is at `566f9fa`; its plan has 24 items ticked and 31 open.
+
+**Pins.** The gateway vendors quickfix-rs `462737c` (0.4.2, C++ `fc866418`). quickfix-rs `krx/main` (`916b5c3`) now pins C++ `82177bd5`, which adds R-P1-7 (#73: a stopped `ThreadedSocketInitiator` no longer hangs on a connection that arrived late). That pin has no release number yet, and the gateway doesn't run it. The C++ fork's mutation job on `krx/main` hit its 3-hour limit twice after #73; the next nightly run passed.
 
 | Item | Status | Where in the gateway |
 |---|---|---|
 | 10.1 | Done, changed by the owner | P0-2 (D3): nothing is released while the exchange trade session is down. The staleness rule was rejected (QF-2, option A2): a resent order is gap-filled with `DoNotSend` and put back into its board queue, then sent as a new order. No age limit; the operator's cancel-all covers a long outage. `NotSent` from 0.4.0 is handled (F8) |
-| 10.2 | Mostly | P1-1 write-ahead journal: the `Q` record is written before release and synced within 5 ms (D7); kill -9 at every crash point tested. P0-5: a duplicate ID is refused with 0207 for the rest of the day. The journal's sync runs on its own thread (P1-1b, #75, `1b7b44b`). Open: the 2,400-order open-burst measurement |
+| 10.2 | Done | P1-1 write-ahead journal: the `Q` record is written before release and synced within 5 ms (D7); kill -9 at every crash point tested; the journal's sync on its own thread (P1-1b, #75). P1-1c (#83): the broker callback writes `Q` and waits for it, so a crash before the record leaves the broker's sequence number untaken and the broker resends; recovery checks unsent orders again and drops a resend of an order it already has. P0-5: a duplicate ID is refused with 0207 for the rest of the day. Measured on the lab node: the open burst's last of 2,400 orders at 28–56 ms (production 80–185 ms). Open: `journal_wait` on the lab node |
 | 10.3 | Done | P0-9 (D1): the dictionary was widened to everything the exchange sends; 66 sample days, 6.5 M exchange ERs, no 35=3. F9: `krx_sent_errors_total` and alert `KrxRejectSent` on the engine's `ERROR: sent` lines. Zero 35=3 over all recorded days is checked at the evidence gate |
 | 10.4 | Partly | Done: abort on panic (P0-1), no panicking getters or float prices (P1-5), per-broker outbound queues (P2-1), `on_logout` outside the session lock (quickfix-rs phase 19). Open: the lock-inversion, send-from-callback and many-senders-while-the-link-drops tests under ASan; the gateway's CI has no ASan or TSan job yet (its P1-6, F11) |
-| 10.5 | Not started | No session-level conformance suite and no HOSE/HNX simulator. The gateway instead replays recorded production days against its fake exchange (125 of 129 HOSE days clean; HNX partly), and plans the exchange's UAT (G-P0-19). Whether that replaces the 59 cases is an open question for the owner |
-| 10.6 | Mostly | Built as BDD features: gaps both ways and an exchange disconnect mid-burst (`exchange_session_down`), kill -9 and restart (`gateway_process`, `restart_recovery`, `restart_restore`), a store cut off by a host crash (F6b, D14 alarm), resends sent as new orders (F8), the close of day (`trading_day`). Open: SOD/EOD and session window (O-3, waits for the HOSE/HNX answer on the daily sequence policy), weekend and holiday, the 09:00 resend storm measurement, a SequenceReset-Reset to a lower number, and a garbled frame at the broker port (P1-6 test) |
-| 10.7 | Mostly | Recorded-day replays cover the real schedule (ATO, lunch with the session up, ATC, put-through) and `trading_day`, `orders_waiting_for_open`, `intermission`, `order_replace_rules`, `derivative_amends` and `nego` test it. Halt resumption is tested (`trading_day`: an order for a halted instrument waits, then goes out in arrival order when the halt is lifted). MTL orders (`TimeInForce` 9) pass through unchanged and the dictionary allows 9; the recorded days hold them (21 of 35 HOSE days, 49 HNX day files), but no feature names them yet. No test for periodic call auctions |
+| 10.5 | Mostly, in review | The HOSE FAT suite (`docs/fat/FAT_PLAN.md`, PRs #93–#99, a stack of 7, not merged): a fake broker sends through the real gateway to a fake HOSE that answers by the rules of HOSE's FAT appendix. 293 scenarios pass; every A.1 item and A.10 case has a scenario, checked by `scripts/fat-coverage-check.sh`. It found 3 gateway bugs (G3-1, G4-1, G4-2; their 9 scenarios are skipped as `@gateway-bug` until fixed): #101 fixes G4-1 (a deal against an IOI sent twice) and G4-2 (the approver's trade report routed to the default broker); the owner accepted G3-1 as designed (F34) and 9 questions for the owner or HOSE (F6, F10, F21–F26) (`docs/fat/findings/README.md`). Recorded-day replays add the real days (125 of 129 HOSE days clean; HNX partly; #100, merged, runs them on the lab cluster). No HNX FAT suite, and no session-level suite of the 59 FIX cases: replay plus FAT plus the exchange's UAT may replace it (owner) |
+| 10.6 | Mostly | Built as BDD features: gaps both ways and an exchange disconnect mid-burst (`exchange_session_down`), kill -9 and restart (`gateway_process`, `restart_recovery`, `restart_restore`), a store cut off by a host crash (F6b, D14 alarm), resends sent as new orders (F8), the close of day (`trading_day`), a link cut with no logout on either side, reconnected after 3–120 s with resend (#92). Open: SOD/EOD and session window (O-3, waits for the HOSE/HNX answer on the daily sequence policy), weekend and holiday, the 09:00 resend storm measurement, a SequenceReset-Reset to a lower number, and a garbled frame at the broker port (P1-6 test) |
+| 10.7 | Mostly | Recorded-day replays cover the real schedule (ATO, lunch with the session up, ATC, put-through) and `trading_day`, `orders_waiting_for_open`, `intermission`, `order_replace_rules`, `derivative_amends` and `nego` test it. Halt resumption is tested (`trading_day`: an order for a halted instrument waits, then goes out in arrival order when the halt is lifted). MTL orders (`TimeInForce` 9) pass through unchanged and the dictionary allows 9; the recorded days hold them (21 of 35 HOSE days, 49 HNX day files), and a feature names them. P1-1e: when several boards open at once, the main board's orders go first (a configured priority lane; HOSE `STO-G1`, HNX `STX-G1`, `UPX-G1`, `DVX-G1`). The FAT suite (10.5) adds board sessions, order types, amend and cancel, halts, auction matching, the calendar and the emergency terminal; where the periodic-call-auction boundary falls is an open question for HOSE (F22) |
 | 10.8 | Partly, scope changed | The gateway's layer is done: duplicate IDs (P0-5), replace terms (P2-7), the operator kill switch with a server-checked `CANCEL ALL` and an audit log (P1-4, D8, D9). Price band, lot, tick, credit and position checks belong to the brokers' order systems, by a signed statement (O-7, open). Throttles wait for HOSE's answer on member order-rate limits (question 3) |
 
-The gateway's plan is stale on the fork. Its F10 waits for C++ 6.6 and F12 for the Phase 8 root cause; both are in `fc866418`, which the gateway already runs. F11 (ASan runs of `test_fd_double_close` and 10am) can start now.
+The gateway's plan still lists P0-10, P1-6 and P2-2 as open, but the engine and binding fixes they wait for are in the pin it runs. What is really left of them: the ASan and TSan jobs in the gateway's CI, and the regression test that sends a bad data-length frame and a pre-logon SequenceReset to the broker port.
+
+**Next, in the fork and quickfix-rs:**
+- release quickfix-rs 0.4.3 with the R-P1-7 pin (`82177bd5`), so the gateway can take it by version.
 
 **Next, in the gateway:**
-- merge the move to quickfix-rs 0.4.2;
-- tick F10 and F12;
-- a feature for MTL orders, and one for periodic call auctions;
-- add the ASan and TSan jobs, plus 10.4's tests (F11);
+- take 0.4.3;
+- tick P0-10, P1-6 and P2-2's fixed parts;
+- add the ASan and TSan jobs, plus 10.4's tests and the bad-frame test (F11);
+- merge the FAT stack with its fixes (#101, G4-1 and G4-2) and untag their scenarios;
 - close the 10.6 gaps.
 
 **Next, for the owner:**
-- whether recorded-day replay plus exchange UAT replaces 10.5's conformance suite;
+- whether recorded-day replay, the FAT suite and the exchange's UAT replace 10.5's 59 session cases;
+- the FAT suite's questions (F6, F10, F21–F26);
 - the written HOSE and HNX questions (daily sequence policy, order-rate limits), which block O-3, the 10.6 schedule cases and 10.8's throttles.
 
 ### Phase 11 — Fault injection and performance · **high** · `enCapital/krx_gateway_rust` + lab
@@ -282,6 +288,19 @@ The gateway's plan is stale on the fork. Its F10 waits for C++ 6.6 and F12 for t
 - 11.6 Resource exhaustion: fd limit, memory cgroup, CPU starvation.
 - 11.7 Performance method document (open-loop load, HdrHistogram with coordinated-omission correction, wire-to-wire timing) and a baseline on production-like hardware: p50/p99/p99.9/p99.99/max, order → wire and ExecutionReport → `fromApp`, fsync on and off.
 - 11.8 Full-day soak at 2× peak message rate; 09:00 ATO and 14:30 ATC burst replay with a simultaneous large resend; nightly p99.9 regression job (≤ 10 %).
+
+**Status, 17 Nov 2026.** Phase 11 runs in the gateway alongside Phase 10's last items. 11.2 and 11.5 waited for P1-1c (a crash between the broker callback and the journal lost an order); P1-1c is merged, so they can start.
+
+| Item | Status | Where in the gateway |
+|---|---|---|
+| 11.1 | Started | A link cutter between the gateway and the fake exchange: a cut with no logout, dials refused while cut, reconnect after 3–120 s with resend (#92). Not built: netem or toxiproxy delay, loss, reorder, bandwidth and zero window |
+| 11.2 | Partly | kill -9 at every journal crash point and right after the broker callback (P1-1, P1-1c), one at a time. Not built: SIGKILL ×100 at random points in a burst, SIGSTOP of the exchange |
+| 11.3 | Partly | Disk full during the open (P1-3, `disk_full.feature`), a slow journal disk (P1-1b). Not built: EIO (dm-flakey), a read-only remount |
+| 11.4 | Not started | |
+| 11.5 | Not started | |
+| 11.6 | Not started | |
+| 11.7 | Started | The open burst on the lab node: the last of 2,400 orders at 28–56 ms, median 33 ms (production 80–185 ms); two boards opening at once 67–180 ms (P1-1e). The gateway's V1.1 speed plan (`docs/V1_1_PLAN.md`): Phase 0 baseline and profile on the Mac (Linux profile open), Phases 1, 2 and 5 merged, its Phase 3 (burst send) not built on the profile's numbers, Phase 4 (10ae) experimental. No method document with coordinated-omission correction yet; production-class hardware not measured |
+| 11.8 | Not started | The stuck-broker soak at peak rate (gateway P2-1) is built, not run |
 
 ### Phase 12 — Fork release and governance · **medium** · `quickfix`
 
