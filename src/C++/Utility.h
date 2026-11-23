@@ -74,6 +74,7 @@
 #ifdef _MSC_VER
 /////////////////////////////////////////////
 #include <Winsock2.h>
+#include <Ws2tcpip.h>
 #include <process.h>
 #include <direct.h>
 #include <time.h>
@@ -152,7 +153,9 @@ void socket_init();
 void socket_term();
 std::string socket_error();
 int socket_bind(socket_handle socket, const char* hostname, int port);
-socket_handle socket_createAcceptor(int port, bool reuse = false);
+socket_handle socket_createAcceptor(int port, bool reuse = false, const std::string& host = "");
+/// Empty host: every interface (INADDR_ANY); otherwise a numeric IPv4 address
+bool socket_parseAcceptHost(const std::string& host, in_addr& address);
 socket_handle socket_createConnector();
 int socket_connect(socket_handle s, const char* address, int port);
 socket_handle socket_accept(socket_handle s);

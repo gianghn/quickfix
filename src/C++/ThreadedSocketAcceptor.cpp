@@ -94,6 +94,7 @@ EXCEPT ( ConfigError )
     if( settings.has(SOCKET_NODELAY) )
       settings.getBool( SOCKET_NODELAY );
   }
+  checkSocketAcceptHosts( sessionSettings );
 }
 
 void ThreadedSocketAcceptor::onInitialize( const SessionSettings& sessionSettings )
@@ -125,13 +126,14 @@ EXCEPT ( RuntimeError )
     const int rcvBufSize = settings.has( SOCKET_RECEIVE_BUFFER_SIZE ) ?
       settings.getInt( SOCKET_RECEIVE_BUFFER_SIZE ) : 0;
 
-    socket_handle socket = socket_createAcceptor( port, reuseAddress );
+    const std::string host = socketAcceptHost( settings );
+    const socket_handle socket = socket_createAcceptor( port, reuseAddress, host );
     if( socket == INVALID_SOCKET_HANDLE )
     {
       SocketException e;
       socket_close( socket );
-      throw RuntimeError( "Unable to create, bind, or listen to port " 
-                         + IntConvertor::convert( (unsigned short)port ) + " (" + e.what() + ")" );
+      throw RuntimeError( "Unable to create, bind, or listen to "
+                         + acceptAddressText( port, host ) + " (" + e.what() + ")" );
     }
     if( noDelay )
       socket_setsockopt( socket, TCP_NODELAY );
