@@ -95,13 +95,14 @@ SocketServer::SocketServer( int timeout )
 : m_monitor( timeout ) {}
 
 socket_handle SocketServer::add( int port, bool reuse, bool noDelay,
-                                 int sendBufSize, int rcvBufSize )
+                                 int sendBufSize, int rcvBufSize,
+                                 const std::string& host )
   EXCEPT ( SocketException& )
 {
   if( m_portToInfo.find(port) != m_portToInfo.end() )
     return m_portToInfo[port].m_socket;
 
-  socket_handle socket = socket_createAcceptor( port, reuse );
+  const socket_handle socket = socket_createAcceptor( port, reuse, host );
   if( socket == INVALID_SOCKET_HANDLE)
     throw SocketException();
   if( noDelay )

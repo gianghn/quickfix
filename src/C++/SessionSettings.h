@@ -62,6 +62,7 @@ const char CHECK_LATENCY[] = "CheckLatency";
 const char MAX_LATENCY[] = "MaxLatency";
 const char HEARTBTINT[] = "HeartBtInt";
 const char SOCKET_ACCEPT_PORT[] = "SocketAcceptPort";
+constexpr const char* SOCKET_ACCEPT_HOST = "SocketAcceptHost";  // KRX fork (gateway review B6)
 const char SOCKET_REUSE_ADDRESS[] = "SocketReuseAddress";
 const char SOCKET_CONNECT_HOST[] = "SocketConnectHost";
 const char SOCKET_CONNECT_PORT[] = "SocketConnectPort";

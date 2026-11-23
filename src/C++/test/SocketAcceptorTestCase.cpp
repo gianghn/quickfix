@@ -25,6 +25,7 @@
 #endif
 
 #include <SocketAcceptor.h>
+#include <ThreadedSocketAcceptor.h>
 #include <Utility.h>
 #include <fix42/Logon.h>
 #include "TestHelper.h"
@@ -104,4 +105,152 @@ TEST_CASE("SocketAcceptorTests")
 
   object.stop( true );
   destroySocket( socket );
+}
+
+// KRX fork: SocketAcceptHost binds the listening socket to one IPv4 address
+namespace
+{
+SessionSettings acceptHostSettings( const std::string& port,
+                                    const std::string& firstHost,
+                                    const std::string& secondHost )
+{
+  std::string input =
+    "[DEFAULT]\n"
+    "ConnectionType=acceptor\n"
+    "SocketReuseAddress=Y\n"
+    "StartTime=00:00:00\n"
+    "EndTime=00:00:00\n"
+    "UseDataDictionary=N\n"
+    "SocketAcceptPort=" + port + "\n"
+    "[SESSION]\n"
+    "BeginString=FIX.4.2\n"
+    "SenderCompID=ISLD\n"
+    "TargetCompID=TW\n"
+    + firstHost +
+    "[SESSION]\n"
+    "BeginString=FIX.4.2\n"
+    "SenderCompID=ISLD\n"
+    "TargetCompID=WT\n"
+    + secondHost;
+  std::stringstream stream( input );
+  SessionSettings settings;
+  stream >> settings;
+  return settings;
+}
+
+std::string hostLine( const std::string& host )
+{
+  return "SocketAcceptHost=" + host + "\n";
+}
+
+uint16_t freePort()
+{
+  socket_handle socket = socket_createAcceptor( 0, true );
+  uint16_t port = (uint16_t)socket_hostport( socket );
+  socket_close( socket );
+  return port;
+}
+
+// A started acceptor is stopped again, so a failed check leaves no thread behind
+bool startIsConfigError( Acceptor& acceptor )
+{
+  try
+  {
+    acceptor.start();
+  }
+  catch( ConfigError& )
+  {
+    return true;
+  }
+  catch( std::exception& )
+  {
+    return false;
+  }
+  acceptor.stop( true );
+  return false;
+}
+}
+
+TEST_CASE("SocketAcceptHostTests")
+{
+  TestApplication application;
+  MemoryStoreFactory factory;
+
+  SECTION("bindsTheGivenAddress")
+  {
+    SessionSettings settings = acceptHostSettings( "0", hostLine( "127.0.0.1" ), hostLine( "127.0.0.1" ) );
+    SocketAcceptor object( application, factory, settings );
+    object.poll();
+    socket_handle socket = createSocket( object.sessionToPort().find(SessionID("FIX.4.2", "ISLD", "TW"))->second, "127.0.0.1" );
+    CHECK( socket != INVALID_SOCKET_HANDLE );
+    object.stop( true );
+    destroySocket( socket );
+  }
+
+  SECTION("emptyHostBindsEveryAddress")
+  {
+    SessionSettings settings = acceptHostSettings( "0", hostLine( "" ), "" );
+    SocketAcceptor object( application, factory, settings );
+    object.poll();
+    socket_handle socket = createSocket( object.sessionToPort().find(SessionID("FIX.4.2", "ISLD", "TW"))->second, "127.0.0.1" );
+    CHECK( socket != INVALID_SOCKET_HANDLE );
+    object.stop( true );
+    destroySocket( socket );
+  }
+
+  SECTION("hostThatIsNotANumericIPv4AddressIsAConfigError")
+  {
+    const char* hosts[] = { "localhost", "127.0.0", "256.0.0.1", "1.2.3.4.5", "::1", "x" };
+    for( const char* host : hosts )
+    {
+      INFO( host );
+      SessionSettings settings = acceptHostSettings( IntConvertor::convert( freePort() ), hostLine( host ), hostLine( host ) );
+      SocketAcceptor plain( application, factory, settings );
+      CHECK( startIsConfigError( plain ) );
+      ThreadedSocketAcceptor threaded( application, factory, settings );
+      CHECK( startIsConfigError( threaded ) );
+    }
+  }
+
+  SECTION("samePortWithTwoHostsIsAConfigError")
+  {
+    const std::string port = IntConvertor::convert( freePort() );
+    SessionSettings twoHosts = acceptHostSettings( port, hostLine( "127.0.0.1" ), hostLine( "127.0.0.2" ) );
+    SocketAcceptor plain( application, factory, twoHosts );
+    CHECK( startIsConfigError( plain ) );
+    ThreadedSocketAcceptor threaded( application, factory, twoHosts );
+    CHECK( startIsConfigError( threaded ) );
+
+    SessionSettings oneWithout = acceptHostSettings( port, hostLine( "127.0.0.1" ), "" );
+    ThreadedSocketAcceptor threadedOneWithout( application, factory, oneWithout );
+    CHECK( startIsConfigError( threadedOneWithout ) );
+  }
+
+  SECTION("samePortWithTheSameHostIsAccepted")
+  {
+    SessionSettings settings = acceptHostSettings( IntConvertor::convert( freePort() ), hostLine( "127.0.0.1" ), hostLine( "127.0.0.1" ) );
+    ThreadedSocketAcceptor object( application, factory, settings );
+    CHECK_NOTHROW( object.start() );
+    object.stop( true );
+  }
+
+  SECTION("addressNotOnThisHostFailsWithPortAndHost")
+  {
+    // 192.0.2.1 is TEST-NET-1: never a local address, so bind() fails
+    const std::string port = IntConvertor::convert( freePort() );
+    SessionSettings settings = acceptHostSettings( port, hostLine( "192.0.2.1" ), hostLine( "192.0.2.1" ) );
+    ThreadedSocketAcceptor object( application, factory, settings );
+    std::string error;
+    try
+    {
+      object.start();
+      object.stop( true );
+    }
+    catch( RuntimeError& e )
+    {
+      error = e.what();
+    }
+    INFO( error );
+    CHECK( error.find( "port " + port + " on 192.0.2.1" ) != std::string::npos );
+  }
 }

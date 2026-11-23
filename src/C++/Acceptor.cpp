@@ -279,4 +279,39 @@ THREAD_PROC Acceptor::startThread( void* p )
   pAcceptor->onStart();
   return 0;
 }
+
+std::string Acceptor::socketAcceptHost( const Dictionary& settings )
+{
+  return settings.has( SOCKET_ACCEPT_HOST ) ? settings.getString( SOCKET_ACCEPT_HOST ) : "";
+}
+
+// One listening socket per port: a second host on the same port would silently be ignored
+void Acceptor::checkSocketAcceptHosts( const SessionSettings& sessionSettings )
+EXCEPT ( ConfigError )
+{
+  std::map<int, std::pair<std::string, in_addr> > portToHost;
+  for( const SessionID& sessionID : sessionSettings.getSessions() )
+  {
+    const Dictionary& settings = sessionSettings.get( sessionID );
+    const std::string host = socketAcceptHost( settings );
+    in_addr address = {};
+    if( !socket_parseAcceptHost( host, address ) )
+      throw ConfigError( std::string( SOCKET_ACCEPT_HOST ) + " must be a numeric IPv4 address: \"" + host + "\"" );
+
+    const int port = settings.getInt( &SOCKET_ACCEPT_PORT[0] );
+    const auto found = portToHost.find( port );
+    if( found == portToHost.end() )
+      portToHost[port] = std::make_pair( host, address );
+    else if( found->second.second.s_addr != address.s_addr )
+      throw ConfigError( "SocketAcceptPort " + IntConvertor::convert( port ) + " has two "
+                         + SOCKET_ACCEPT_HOST + " values: \"" + found->second.first
+                         + "\" and \"" + host + "\"" );
+  }
+}
+
+std::string Acceptor::acceptAddressText( int port, const std::string& host )
+{
+  const std::string text = "port " + IntConvertor::convert( static_cast<uint16_t>( port ) );
+  return host.empty() ? text : text + " on " + host;
+}
 }

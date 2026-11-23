@@ -116,6 +116,13 @@ private:
   MessageStoreFactory& m_messageStoreFactory;
 protected:
   SessionSettings m_settings;
+
+  /// SocketAcceptHost of a session; empty binds every interface
+  static std::string socketAcceptHost( const Dictionary& settings );
+  /// Each SocketAcceptHost is a numeric IPv4 address, and sessions on one SocketAcceptPort share it
+  static void checkSocketAcceptHosts( const SessionSettings& settings ) EXCEPT ( ConfigError );
+  /// "port P", or "port P on HOST", for bind errors
+  static std::string acceptAddressText( int port, const std::string& host );
 private:
   LogFactory* m_pLogFactory;
   Log* m_pLog;

@@ -63,12 +63,14 @@ EXCEPT ( ConfigError )
     if( settings.has(SOCKET_NODELAY) )
       settings.getBool( SOCKET_NODELAY );
   }
+  checkSocketAcceptHosts( sessionSettings );
 }
 
 void SocketAcceptor::onInitialize( const SessionSettings& sessionSettings )
 EXCEPT ( RuntimeError )
 {
   uint16_t port = 0;
+  std::string host;
 
   try
   {
@@ -91,7 +93,8 @@ EXCEPT ( RuntimeError )
       const int rcvBufSize = settings.has( SOCKET_RECEIVE_BUFFER_SIZE ) ?
         settings.getInt( SOCKET_RECEIVE_BUFFER_SIZE ) : 0;
 
-      socket_handle acceptSocket = m_pServer->add( port, reuseAddress, noDelay, sendBufSize, rcvBufSize );
+      host = socketAcceptHost( settings );
+      const socket_handle acceptSocket = m_pServer->add( port, reuseAddress, noDelay, sendBufSize, rcvBufSize, host );
       m_portToSessions[socket_hostport(acceptSocket)].insert( sessionID );
       m_sessionToPort[sessionID] = socket_hostport(acceptSocket);
     }    
@@ -99,8 +102,8 @@ EXCEPT ( RuntimeError )
   catch( SocketException& e )
   {
     m_pServer.reset();
-    throw RuntimeError( "Unable to create, bind, or listen to port "
-                       + IntConvertor::convert( (unsigned short)port ) + " (" + e.what() + ")" );
+    throw RuntimeError( "Unable to create, bind, or listen to "
+                       + acceptAddressText( port, host ) + " (" + e.what() + ")" );
   }
 }
 

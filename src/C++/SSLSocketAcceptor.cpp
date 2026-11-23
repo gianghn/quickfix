@@ -179,6 +179,7 @@ EXCEPT ( ConfigError )
     if( settings.has(SOCKET_NODELAY) )
       settings.getBool( SOCKET_NODELAY );
   }
+  checkSocketAcceptHosts( sessionSettings );
 }
 
 void SSLSocketAcceptor::onInitialize( const SessionSettings& sessionSettings )
@@ -220,6 +221,7 @@ EXCEPT ( RuntimeError )
   }
 
   short port = 0;
+  std::string host;
 
   try
   {
@@ -244,13 +246,14 @@ EXCEPT ( RuntimeError )
         settings.getInt( SOCKET_RECEIVE_BUFFER_SIZE ) : 0;
 
       m_portToSessions[port].insert( sessionID );
-      m_pServer->add( port, reuseAddress, noDelay, sendBufSize, rcvBufSize );      
-    }    
+      host = socketAcceptHost( settings );
+      m_pServer->add( port, reuseAddress, noDelay, sendBufSize, rcvBufSize, host );
+    }
   }
   catch( SocketException& e )
   {
-    throw RuntimeError( "Unable to create, bind, or listen to port "
-                       + IntConvertor::convert( (unsigned short)port ) + " (" + e.what() + ")" );
+    throw RuntimeError( "Unable to create, bind, or listen to "
+                       + acceptAddressText( port, host ) + " (" + e.what() + ")" );
   }
 }
 

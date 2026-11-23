@@ -208,8 +208,21 @@ int socket_bind(socket_handle socket, const char* hostname, int port )
                      socklen );
 }
 
-socket_handle socket_createAcceptor(int port, bool reuse)
+bool socket_parseAcceptHost(const std::string& host, in_addr& address)
 {
+  if ( host.empty() )
+  {
+    address.s_addr = INADDR_ANY;
+    return true;
+  }
+  return inet_pton( AF_INET, host.c_str(), &address ) == 1;
+}
+
+socket_handle socket_createAcceptor(int port, bool reuse, const std::string& host)
+{
+  in_addr bindAddress = {};
+  if ( !socket_parseAcceptHost( host, bindAddress ) ) return INVALID_SOCKET_HANDLE;
+
     socket_handle socket = ::socket( PF_INET, SOCK_STREAM, 0 );
   if ( socket == INVALID_SOCKET_HANDLE) return INVALID_SOCKET_HANDLE;
 
@@ -218,7 +231,7 @@ socket_handle socket_createAcceptor(int port, bool reuse)
 
   address.sin_family = PF_INET;
   address.sin_port = htons( port );
-  address.sin_addr.s_addr = INADDR_ANY;
+  address.sin_addr = bindAddress;
   socklen = sizeof( address );
   if( reuse )
     socket_setsockopt( socket, SO_REUSEADDR );
