@@ -374,6 +374,13 @@ bool ThreadedSocketConnection::setSession( const std::string& msg )
     return false;
   }
 
+  // KRX fork (gateway review B6 follow-up): only from an address the session lists
+  if ( !m_pSession->allowsConnection( m_socket ) )
+  {
+    m_pSession = nullptr;
+    return false;
+  }
+
   SessionID sessionID = m_pSession->getSessionID();
   m_pSession = 0;
 

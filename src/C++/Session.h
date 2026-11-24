@@ -39,6 +39,7 @@
 #include <atomic>
 #include <utility>
 #include <map>
+#include <set>
 #include <queue>
 #include <functional>
 
@@ -171,6 +172,12 @@ public:
   int getHeartBtInt();
   void setSendTimeoutMs ( int value )
     { m_sendTimeoutMs = value; }
+  // KRX fork (gateway review B6 follow-up): the addresses a connection may carry this session
+  // from (AllowedRemoteAddresses, in socket_ipv4Text form); empty: any address.
+  void setAllowedRemoteAddresses ( const std::set<std::string>& addresses )
+    { m_allowedRemoteAddresses = addresses; }
+  // Whether the connection on SOCKET may carry this session; logs the refusal when not.
+  bool allowsConnection ( socket_handle socket );
   // KRX fork (U-9, Q16): how many messages may wait above a gap (MaxQueuedMessages); 0 no limit.
   int getMaxQueuedMessages() const
     { return m_state.maxQueued(); }
@@ -384,6 +391,7 @@ private:
   bool m_checkLatency;
   int m_maxLatency;
   int m_sendTimeoutMs{ 0 };
+  std::set<std::string> m_allowedRemoteAddresses;
   // KRX fork (U-9): messages dropped above a full queue since the last disconnect.
   int m_queueDropped{ 0 };
   bool m_resetOnLogon;
