@@ -1,6 +1,7 @@
 // Go-live review B6 follow-up (gateway): AllowedRemoteAddresses lists the IPv4 addresses a session
 // may be logged on from. A connection whose first message names that session from any other
 // address is dropped before the session sees it, and the refusal is logged on the session's log.
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -74,13 +75,23 @@ FIX::SessionSettings BrokerSettings(int port) {
 class EventLogFactory : public FIX::LogFactory {
  public:
   // The engine owns each log until it hands it back to destroy().
-  FIX::Log* create() override { return std::make_unique<EventLog>(*this).release(); }
-
-  FIX::Log* create(const FIX::SessionID& /*session_id*/) override {
+  FIX::Log* create() override {
+    ++live_;
     return std::make_unique<EventLog>(*this).release();
   }
 
-  void destroy(FIX::Log* log) override { const std::unique_ptr<FIX::Log> owned(log); }
+  FIX::Log* create(const FIX::SessionID& /*session_id*/) override {
+    ++live_;
+    return std::make_unique<EventLog>(*this).release();
+  }
+
+  void destroy(FIX::Log* log) override {
+    --live_;
+    const std::unique_ptr<FIX::Log> owned(log);
+  }
+
+  // Logs made and not yet handed back: the acceptor's own and one per session.
+  int Live() const { return live_; }
 
   bool WaitForEvent(const std::string& text) {
     const auto deadline = std::chrono::steady_clock::now() + kWait;
@@ -120,6 +131,7 @@ class EventLogFactory : public FIX::LogFactory {
     EventLogFactory& factory_;
   };
 
+  std::atomic<int> live_{0};
   std::mutex mutex_;
   std::vector<std::string> events_;
 };
@@ -151,6 +163,18 @@ std::string ConfigErrorOnCreate(const FIX::SessionSettings& settings) {
     return error.what();
   }
   return "";
+}
+
+// Whether building a threaded acceptor with SETTINGS and LOGS threw a ConfigError.
+bool RefusedOnCreate(const FIX::SessionSettings& settings, FIX::LogFactory& logs) {
+  FIX::NullApplication app;
+  FIX::MemoryStoreFactory store;
+  try {
+    const FIX::ThreadedSocketAcceptor acceptor(app, store, settings, logs);
+  } catch (const FIX::ConfigError&) {
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -243,6 +267,32 @@ SCENARIO("A session whose address list is not a list of IPv4 addresses does not 
     THEN("the acceptor refuses with a configuration error naming the setting") {
       INFO("error: " << error);
       REQUIRE(error.contains("AllowedRemoteAddresses"));
+    }
+  }
+}
+
+// The ConfigError comes from the acceptor's constructor, whose destructor then never runs: what
+// it made before (its log, the sessions created so far) must not outlive it.
+SCENARIO("An acceptor refused for a bad address list leaves nothing behind", "[krx][b6-allow]") {
+  GIVEN("a valid session, then one whose address list holds a host name") {
+    const FIX::SessionID valid{"FIX.4.4", "KRXGW", "ABROKER"};
+    const FIX::SessionSettings settings = Settings(
+        "[DEFAULT]\nConnectionType=acceptor\nStartTime=00:00:00\nEndTime=00:00:00\n"
+        "UseDataDictionary=N\nHeartBtInt=30\nSocketAcceptPort=" +
+        std::to_string(FreePort()) +
+        "\n[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGW\nTargetCompID=ABROKER\n"
+        "[SESSION]\nBeginString=FIX.4.4\nSenderCompID=KRXGW\nTargetCompID=BROKER\n"
+        "AllowedRemoteAddresses=localhost\n");
+    WHEN("the gateway builds the acceptor") {
+      EventLogFactory logs;
+      const bool refused = RefusedOnCreate(settings, logs);
+      THEN("it is refused, every log is handed back and no session stays registered") {
+        const bool logs_back = logs.Live() == 0;
+        const bool unregistered = FIX::Session::lookupSession(valid) == nullptr;
+        CHECK(refused);
+        CHECK(logs_back);
+        CHECK(unregistered);
+      }
     }
   }
 }
