@@ -170,6 +170,9 @@ bool SocketConnection::read( SocketAcceptor& acceptor, SocketServer& server )
           acceptor.getLog()->onIncoming( message );
         }
       }
+      // KRX fork (gateway review B6 follow-up): only from an address the session lists
+      if( m_pSession && !m_pSession->allowsConnection( m_socket ) )
+        m_pSession = nullptr;
       if( m_pSession )
         m_pSession = acceptor.getSession( message, *this );
       if( m_pSession )

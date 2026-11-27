@@ -30,6 +30,9 @@
 #include "Exceptions.h"
 #include "Dictionary.h"
 
+#include <set>
+#include <string>
+
 namespace FIX
 {
 class SessionID;
@@ -67,6 +70,8 @@ private:
                                                        const std::string& settingsKey) EXCEPT (ConfigError);
   // KRX fork (P0-8 support, quickfix/quickfix#755)
   static void applyValidationSettings( const Dictionary& settings, DataDictionary& dataDictionary );
+  // KRX fork (gateway review B6 follow-up)
+  static std::set<std::string> allowedRemoteAddresses( const std::string& list ) EXCEPT ( ConfigError );
 
   void processFixtDataDictionaries(const SessionID& sessionID, 
                                    const Dictionary& settings, 

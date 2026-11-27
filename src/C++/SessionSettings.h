@@ -63,6 +63,8 @@ const char MAX_LATENCY[] = "MaxLatency";
 const char HEARTBTINT[] = "HeartBtInt";
 const char SOCKET_ACCEPT_PORT[] = "SocketAcceptPort";
 constexpr const char* SOCKET_ACCEPT_HOST = "SocketAcceptHost";  // KRX fork (gateway review B6)
+// KRX fork (gateway review B6 follow-up): the IPv4 addresses an acceptor session may log on from
+constexpr const char* ALLOWED_REMOTE_ADDRESSES = "AllowedRemoteAddresses";
 const char SOCKET_REUSE_ADDRESS[] = "SocketReuseAddress";
 const char SOCKET_CONNECT_HOST[] = "SocketConnectHost";
 const char SOCKET_CONNECT_PORT[] = "SocketConnectPort";

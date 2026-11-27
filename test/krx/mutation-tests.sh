@@ -7,8 +7,9 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 build=${KRX_BUILD:-$root/build/mull}
 
 # Some mutants make a suite loop for ever; Mull's own timeout would stop only this script and leave
-# the suite running, so each suite gets its own limit (a timeout counts as killed).
-timeout 60 "$build/src/C++/test/krx/krx_ut" >/dev/null
+# the suite running, so each suite gets its own limit (a timeout counts as killed). krx_ut took
+# 64 s unmutated on a Mac at the B6 follow-up, past its old 60 s: 120 s, as ut.
+timeout 120 "$build/src/C++/test/krx/krx_ut" >/dev/null
 
 # ut writes its stores and logs under ./store and ./log. A mutant can leave those files corrupt (a
 # bad .session file crashes the next clean run in FileStoreTests_6), and Mull runs four of these

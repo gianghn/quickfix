@@ -183,6 +183,10 @@ short socket_hostport(socket_handle socket);
 const char* socket_hostname(socket_handle socket);
 const char* socket_hostname(const char* name);
 const char* socket_peername(socket_handle socket);
+/// KRX fork (gateway review B6 follow-up): the peer's IPv4 address as text, "" when it has none
+std::string socket_peerIPv4(socket_handle socket);
+/// KRX fork: ADDRESS in dotted text, the form socket_peerIPv4 gives
+std::string socket_ipv4Text(const in_addr& address);
 std::pair<socket_handle, socket_handle> socket_createpair();
 
 tm time_gmtime(const time_t* t);

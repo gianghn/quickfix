@@ -92,6 +92,8 @@ public:
 
 private:
   void initialize() EXCEPT ( ConfigError );
+  // KRX fork (gateway review B6 follow-up): initialize(), and on an error free what it made
+  void initializeOrRelease() EXCEPT ( ConfigError );
 
   /// Implemented to configure acceptor
   virtual void onConfigure( const SessionSettings& ) EXCEPT ( ConfigError ) {};

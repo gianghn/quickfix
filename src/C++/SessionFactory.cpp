@@ -31,6 +31,7 @@
 #include "Session.h"
 
 #include <memory>
+#include <sstream>
 
 namespace FIX
 {
@@ -220,8 +221,33 @@ Session* SessionFactory::create( const SessionID& sessionID,
     pSession->setSendNextExpectedMsgSeqNum( settings.getBool( SEND_NEXT_EXPECTED_MSG_SEQ_NUM ) );
   if ( isNonStopSession )
     pSession->setIsNonStopSession( isNonStopSession );
+  if ( settings.has( ALLOWED_REMOTE_ADDRESSES ) )
+    pSession->setAllowedRemoteAddresses(
+        allowedRemoteAddresses( settings.getString( ALLOWED_REMOTE_ADDRESSES ) ) );
 
   return pSession.release();
+}
+
+// KRX fork (gateway review B6 follow-up): a comma-separated list of numeric IPv4 addresses. Set but
+// empty is an error, not "any address": a list that came out empty must not open the session.
+std::set<std::string> SessionFactory::allowedRemoteAddresses( const std::string& list )
+EXCEPT ( ConfigError )
+{
+  std::set<std::string> addresses;
+  std::istringstream entries( list );
+  std::string entry;
+  while ( std::getline( entries, entry, ',' ) )
+  {
+    const std::string host = string_strip( entry );
+    in_addr address = {};
+    if ( host.empty() || !socket_parseAcceptHost( host, address ) )
+      throw ConfigError( std::string( ALLOWED_REMOTE_ADDRESSES )
+                         + " must list numeric IPv4 addresses: \"" + list + "\"" );
+    addresses.insert( socket_ipv4Text( address ) );
+  }
+  if ( addresses.empty() )
+    throw ConfigError( std::string( ALLOWED_REMOTE_ADDRESSES ) + " is empty" );
+  return addresses;
 }
 
 void SessionFactory::destroy( Session* pSession )

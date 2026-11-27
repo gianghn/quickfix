@@ -24,6 +24,7 @@
 #endif
 
 #include "Session.h"
+#include "SessionSettings.h"
 #include "Values.h"
 #include <algorithm>
 #include <chrono>
@@ -679,6 +680,19 @@ int Session::getSendTimeoutMs()
   if ( m_sendTimeoutMs > 0 ) return m_sendTimeoutMs;
   const int heartBtInt = getHeartBtInt();
   return heartBtInt > 0 ? heartBtInt * 500 : 15000;
+}
+
+bool Session::allowsConnection( socket_handle socket )
+{
+  if ( m_allowedRemoteAddresses.empty() ) return true;
+  const std::string peer = socket_peerIPv4( socket );
+  if ( m_allowedRemoteAddresses.count( peer ) > 0 ) return true;
+  // A named string, not a temporary: Mull's known artifact (docs/MAINTENANCE.md §5)
+  const std::string event = "Connection refused: "
+                            + ( peer.empty() ? "a peer without an IPv4 address" : peer )
+                            + " is not in " + ALLOWED_REMOTE_ADDRESSES;
+  m_state.onEvent( event );
+  return false;
 }
 
 int Session::getHeartBtInt()

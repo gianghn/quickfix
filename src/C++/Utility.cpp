@@ -33,6 +33,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -500,6 +502,28 @@ const char* socket_peername(socket_handle socket )
     return result;
   else
     return "UNKNOWN";
+}
+
+// inet_ntop, not inet_ntoa: connections check their peer on their own threads
+std::string socket_peerIPv4( socket_handle socket )
+{
+  // sockaddr, then a copy: an IPv4 sockaddr_in has its size, and no cast is needed
+  static_assert( sizeof( sockaddr ) == sizeof( sockaddr_in ) );
+  sockaddr address = {};
+  socklen_t length = sizeof( address );
+  if( getpeername( socket, &address, &length ) != 0 || address.sa_family != AF_INET )
+    return "";
+  sockaddr_in peer = {};
+  std::memcpy( &peer, &address, sizeof( peer ) );
+  return socket_ipv4Text( peer.sin_addr );
+}
+
+std::string socket_ipv4Text( const in_addr& address )
+{
+  std::array<char, INET_ADDRSTRLEN> text = {};
+  if( inet_ntop( AF_INET, &address, text.data(), static_cast<socklen_t>( text.size() ) ) == nullptr )
+    return "";
+  return text.data();
 }
 
 std::pair<socket_handle, socket_handle> socket_createpair()

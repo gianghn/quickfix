@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory>
 
 namespace FIX
 {
@@ -49,7 +50,7 @@ EXCEPT ( ConfigError )
   m_firstPoll( true ),
   m_stop( true )
 {
-  initialize();
+  initializeOrRelease();
 }
 
 Acceptor::Acceptor( Application& application,
@@ -67,7 +68,29 @@ EXCEPT ( ConfigError )
   m_firstPoll( true ),
   m_stop( true )
 {
-  initialize();
+  initializeOrRelease();
+}
+
+// An error leaves the constructor without the destructor: the log and the sessions created so far
+// (each registered process-wide under its SessionID) would outlive the acceptor.
+void Acceptor::initializeOrRelease() EXCEPT ( ConfigError )
+{
+  try
+  {
+    initialize();
+  }
+  catch( ... )
+  {
+    for( const auto& session : m_sessions )
+    {
+      const std::unique_ptr<Session> owned( session.second );
+    }
+    m_sessions.clear();
+    if( m_pLogFactory && m_pLog )
+      m_pLogFactory->destroy( m_pLog );
+    m_pLog = nullptr;
+    throw;
+  }
 }
 
 void Acceptor::initialize() EXCEPT ( ConfigError )
